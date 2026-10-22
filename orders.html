@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — My Orders</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="page">
+      <main class="xwide">
+        <h2>My Orders</h2>
+        <div id="list"></div>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    renderSidebar("orders");
+    const me = requireLogin();
+
+    // a purchase that was just placed is reported once (Google Analytics / Meta Pixel)
+    const justPlaced = sessionStorage.getItem("zPurchase");
+    if (justPlaced) {
+      sessionStorage.removeItem("zPurchase");
+      try { track("purchase", JSON.parse(justPlaced)); } catch {}
+    }
+
+    const BILL_READY = ["PREPARING", "SHIPPED", "DELIVERED"];
+    const RETURN_LABEL = { REQUESTED: "Return requested", APPROVED: "Return approved", REJECTED: "Return rejected", RECEIVED: "Return received" };
+    // a readable message for a failed call
+    async function errMsg(r) {
+      const t = await r.text();
+      return (t && t.length < 250 && !t.trim().startsWith("{")) ? t : "Something went wrong. Please try again.";
+    }
+    const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    function payPill(o) {
+      const m = o.paymentMethod || "COD";
+      if (o.paymentStatus === "PAID") return `<span class="pill pill-paid">${m} · Paid</span>`;
+      if (o.paymentStatus === "REFUND_PENDING") return `<span class="pill pill-refund">${m} · Refund pending</span>`;
+      if (o.paymentStatus === "REFUNDED") return `<span class="pill pill-refunded">${m} · Refunded</span>`;
+      return `<span class="pill pill-pending">${m} · Pending</span>`;
+    }
+
+    // cancel is allowed until the admin dispatches the order
+    const canCancel = o => ["PENDING", "CONFIRMED", "PREPARING"].includes(o.status);
+
+    // A return can be asked within RETURN_DAYS (3) of delivery, once. After that the button is switched off.
+    const returnDeadline = o => new Date(new Date(o.deliveredAt || o.orderDate).getTime() + RETURN_DAYS * 86400000);
+    const canReturn = o => o.status === "DELIVERED" && !o.returnStatus && Date.now() <= returnDeadline(o).getTime();
+
+    function returnCell(o) {
+      if (o.status !== "DELIVERED" || o.returnStatus) return "";
+      if (canReturn(o)) {
+        const till = returnDeadline(o).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+        return `<button class="ghost sm" onclick="returnOrder(${o.orderId})">Return</button><span class="sub">Return till ${till}</span>`;
+      }
+      return `<button class="ghost sm" disabled>Return</button><span class="sub">Return period over</span>`;
+    }
+
+    async function load() {
+      if (!me) return;                           // requireLogin already sent them to login.html
+
+      const orders = await (await fetch(`${API}/orders/customer/${me.customerId}`)).json();
+      const its = await Promise.all(orders.map(o => fetch(`${API}/orders/${o.orderId}/items`).then(r => r.json())));
+      orders.forEach((o, i) => {
+        o.itemsHtml = its[i].map(x =>
+          `<div class="item-line"><span class="item-name">${esc(x.product.productName)}</span>${x.size ? " (" + esc(x.size) + ")" : ""} × ${x.quantity}</div>`
+        ).join("");
+      });
+
+      const box = document.getElementById("list");
+      if (!orders.length) {
+        box.innerHTML = "<p class='msg'>No orders yet. <a href='index.html'>Start shopping →</a></p>";
+        return;
+      }
+
+      box.innerHTML = `
+        <div class="table-wrap">
+          <table class="orders-table wide-table">
+            <thead>
+              <tr>
+                <th>Order</th><th>Items</th><th>Date</th><th>Delivery address</th>
+                <th>Payment</th><th>Total</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${[...orders].reverse().map(o => `
+                <tr>
+                  <td><b>#${o.orderId}</b></td>
+                  <td>${o.itemsHtml}</td>
+                  <td>${new Date(o.orderDate).toLocaleDateString()}</td>
+                  <td>${esc(o.address)}</td>
+                  <td>${payPill(o)}</td>
+                  <td class="num">₹${o.totalAmount}${o.discountAmount > 0 ? `<span class="sub">Coupon ${esc(o.couponCode)}: −₹${o.discountAmount}</span>` : ""}</td>
+                  <td>
+                    <div class="stack">
+                      <span class="pill ${o.status === "CANCELLED" ? "pill-cancel" : ""}">${o.status}</span>
+                      ${o.trackingInfo ? `<span class="sub">Tracking: ${esc(o.trackingInfo)}</span>` : ""}
+                      ${o.status === "CANCELLED" ? `<span class="sub">Cancelled by ${o.cancelledBy === "CUSTOMER" ? "you" : "Zivelle"}: ${esc(o.cancelReason || "")}</span>` : ""}
+                      ${o.returnStatus ? `<span class="pill pill-return">${RETURN_LABEL[o.returnStatus] || o.returnStatus}</span>` : ""}
+                    </div>
+                  </td>
+                  <td class="cell-actions">
+                    ${BILL_READY.includes(o.status) ? `<a class="ghost sm" href="invoice.html?id=${o.orderId}" target="_blank">🧾 Invoice</a>` : ""}
+                    ${canCancel(o) ? `<button class="ghost sm danger" onclick="cancelOrder(${o.orderId})">Cancel order</button>` : ""}
+                    ${returnCell(o)}
+                  </td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    async function cancelOrder(id) {
+      const reason = await askText(`Cancel order #${id}`, "Why do you want to cancel this order? (optional)");
+      if (reason === null) return;               // pressed Cancel on the box
+      const r = await fetch(`${API}/orders/${id}/cancel?customerId=${me.customerId}&reason=${encodeURIComponent(reason)}`, { method: "POST" });
+      if (r.ok) toast("Order cancelled"); else showError(await errMsg(r));
+      load();
+    }
+
+    async function returnOrder(id) {
+      const reason = await askText(`Return order #${id}`, "Why do you want to return this order?");
+      if (reason === null) return;
+      const r = await fetch(`${API}/orders/${id}/return?customerId=${me.customerId}&reason=${encodeURIComponent(reason)}`, { method: "POST" });
+      if (r.ok) toast("Return requested"); else showError(await errMsg(r));
+      load();
+    }
+
+    load();
+  </script>
+</body>
+</html>

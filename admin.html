@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Admin</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar admin" id="adminSidebar" hidden></aside>
+
+    <div class="page">
+      <main class="xwide">
+        <section id="loginBox" class="narrow">
+          <h2>🦋 Zivelle Admin</h2>
+          <form id="al" class="form">
+            <input id="au" placeholder="Admin username" required>
+            <input id="ap" type="password" placeholder="Password" required>
+            <button>Login</button>
+          </form>
+          <p class="msg" id="amsg"></p>
+        </section>
+
+        <section id="dash" hidden>
+          <div id="panel"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+
+    // Bill/invoice button appears next to the status once the order reaches these stages
+    const BILL_READY = ["PREPARING", "SHIPPED", "DELIVERED"];
+
+    // ---------------------------------------------------------------
+    // 1. THE MENU  (same groups as the OpenCart-style reference image)
+    //    A group has "children". A single item has none.
+    // ---------------------------------------------------------------
+    const MENU = [
+      { key: "dashboard", icon: "🏠", label: "Dashboard" },
+      { key: "g-product", icon: "👗", label: "Product Management",
+        children: [["categories", "Categories"], ["products", "Products"], ["photos", "Photos"]] },
+      { key: "customers", icon: "🧑‍🤝‍🧑", label: "Customer Management" },
+      { key: "g-order", icon: "📦", label: "Order Management",
+        children: [["orders", "All Orders"], ["packing", "Packing & Dispatch"], ["cancellations", "Cancellations"], ["returns", "Returns"]] },
+      { key: "g-content", icon: "📝", label: "Content Management",
+        children: [["content", "Website Content"], ["banners", "Banners"]] },
+      { key: "g-offers", icon: "🏷️", label: "Offers Management",
+        children: [["coupons", "Coupons & Discounts"]] },
+      { key: "g-reports", icon: "📊", label: "Reports & Analytics",
+        children: [["sales", "Sales Reports"], ["delivery", "Delivery Stats"], ["marketing", "Marketing Analytics"]] },
+      { key: "vendors", icon: "🏬", label: "Vendor Management" },
+      { key: "accounting", icon: "🧮", label: "Accounting" }
+    ];
+
+    // Pages we have NOT built yet. They show a "coming" card so the whole menu is visible.
+    const COMING = {
+      vendors:       ["Phase 2", "Multi-vendor: add and manage vendors (sellers)."],
+      accounting:    ["Phase 2", "Vendor payouts, commissions and accounts."]
+    };
+
+    // label lookup, so a "coming" page can show the right title
+    const LABELS = {};
+    MENU.forEach(m => { LABELS[m.key] = m.label; (m.children || []).forEach(([k, l]) => LABELS[k] = l); });
+
+    let route = sessionStorage.getItem("zAdminRoute") || "dashboard";
+    const openGroups = new Set();
+    const groupOf = key => MENU.find(m => m.children && m.children.some(c => c[0] === key));
+
+    // ---------------------------------------------------------------
+    // 2. SIDEBAR + NAVIGATION
+    // ---------------------------------------------------------------
+    function show() {
+      const ok = sessionStorage.getItem("zAdmin");
+      $("loginBox").hidden = !!ok;
+      $("dash").hidden = !ok;
+      $("adminSidebar").hidden = !ok;
+      const note = sessionStorage.getItem("zAdminMsg");
+      if (!ok && note) { $("amsg").textContent = note; sessionStorage.removeItem("zAdminMsg"); }
+      if (ok) { drawSidebar(); tab(route); }
+    }
+
+    function go(key) {
+      if (key === "photos") { location.href = "photos.html"; return; }
+      route = key;
+      sessionStorage.setItem("zAdminRoute", key);
+      drawSidebar();
+      tab(key);
+    }
+
+    function drawSidebar() {
+      const activeGroup = groupOf(route);
+      if (activeGroup) openGroups.add(activeGroup.key);   // the group of the current page stays open
+
+      $("adminSidebar").innerHTML = `
+        <a class="brand" href="admin.html">🦋 Zivelle Admin</a>
+        <nav class="menu">
+          ${MENU.map(m => {
+            if (!m.children) {
+              return `<button class="menu-parent ${route === m.key ? "active" : ""}" data-go="${m.key}">
+                        <span class="mi">${m.icon}</span>${m.label}</button>`;
+            }
+            const isOpen = openGroups.has(m.key);
+            const groupActive = activeGroup && activeGroup.key === m.key;
+            return `
+              <button class="menu-parent ${groupActive ? "active" : ""}" data-toggle="${m.key}">
+                <span class="mi">${m.icon}</span>${m.label}<span class="chev">${isOpen ? "▴" : "▾"}</span>
+              </button>
+              ${isOpen ? `<div class="menu-children">
+                ${m.children.map(([k, l]) => `<button class="menu-child ${route === k ? "active" : ""}" data-go="${k}">${l}</button>`).join("")}
+              </div>` : ""}`;
+          }).join("")}
+          <button class="menu-parent" id="out"><span class="mi">🚪</span>Logout</button>
+        </nav>`;
+
+      $("adminSidebar").querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
+      $("adminSidebar").querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {
+        const k = b.dataset.toggle;
+        openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k);
+        drawSidebar();
+      });
+      $("out").onclick = () => { sessionStorage.removeItem("zAdmin"); show(); };
+    }
+
+    $("al").onsubmit = async e => {
+      e.preventDefault();
+      $("amsg").textContent = "Checking…";
+      try {
+        const params = new URLSearchParams({ username: $("au").value, password: $("ap").value });
+        const r = await fetch(`${API}/admin/login?` + params, { method: "POST" });
+        const t = await r.text();
+        if (t.includes("successful")) {
+          sessionStorage.setItem("zAdmin", t.split("|")[1]);
+          $("amsg").textContent = "";
+          show();
+        } else if (r.ok) {
+          $("amsg").textContent = "Invalid credentials";
+        } else {
+          $("amsg").textContent = `The server answered with an error (${r.status}). Look at the Eclipse console for the reason.`;
+        }
+      } catch (err) {
+        $("amsg").textContent = "Cannot reach the backend. Is the Spring Boot app running on port 8080? Look at the Eclipse console.";
+      }
+    };
+
+    // ---------------------------------------------------------------
+    // 3. DASHBOARD  (built from the data we already have)
+    // ---------------------------------------------------------------
+    const money = n => "₹" + Math.round(n).toLocaleString("en-IN");
+    const dayKey = d => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+
+    async function renderDashboard(p) {
+      p.innerHTML = `<div class="dash-head"><h2>Dashboard</h2><p class="msg">Loading…</p></div>`;
+      try {
+        const [orders, custRes] = await Promise.all([
+          fetch(`${API}/orders/admin/all`).then(r => r.json()),
+          fetch(`${API}/customer/admin/all`)
+        ]);
+        const customers = custRes.ok ? await custRes.json() : null;
+        const items = await Promise.all(orders.map(o => fetch(`${API}/orders/${o.orderId}/items`).then(r => r.json())));
+
+        // --- the 4 cards ---
+        const live = orders.filter(o => o.status !== "CANCELLED");   // cancelled orders are not sales
+        const totalSales = live.reduce((s, o) => s + Number(o.totalAmount), 0);
+        const pending = orders.filter(o => o.status === "PENDING").length;
+
+        // --- sales of the last 7 days ---
+        const days = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i);
+          days.push({ key: dayKey(d), label: d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric" }), total: 0 });
+        }
+        live.forEach(o => {
+          const day = days.find(x => x.key === dayKey(new Date(o.orderDate)));
+          if (day) day.total += Number(o.totalAmount);
+        });
+        const maxDay = Math.max(...days.map(d => d.total), 1);
+        const hasSales = days.some(d => d.total > 0);
+
+        // --- top selling products (by quantity sold) ---
+        const sold = {};
+        items.filter((_, i) => orders[i].status !== "CANCELLED").flat().forEach(it => {
+          const id = it.product.productId;
+          sold[id] = sold[id] || { product: it.product, qty: 0 };
+          sold[id].qty += it.quantity;
+        });
+        const top = Object.values(sold).sort((a, b) => b.qty - a.qty).slice(0, 5);
+
+        const recent = [...orders].reverse().slice(0, 5);
+
+        const card = (icon, label, value) => `
+          <div class="stat-card">
+            <div class="stat-icon">${icon}</div>
+            <div><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>
+          </div>`;
+
+        p.innerHTML = `
+          <div class="dash-head"><h2>Dashboard</h2><p class="msg">Welcome back, Admin</p></div>
+
+          <div class="stat-grid">
+            ${card("🛍️", "Total Orders", live.length)}
+            ${card("💰", "Total Sales", money(totalSales))}
+            ${card("⏳", "Pending Orders", pending)}
+            ${card("🧑‍🤝‍🧑", "Customers", customers ? customers.length : "—")}
+          </div>
+
+          <div class="dash-grid">
+            <div class="panel">
+              <h3>Sales overview · last 7 days</h3>
+              <div class="bars">
+                ${days.map(d => `
+                  <div class="bar-col" title="${d.label}: ${money(d.total)}">
+                    <span class="bar-val">${d.total ? money(d.total) : ""}</span>
+                    <div class="bar-track"><div class="bar ${d.total ? "" : "bar-empty"}" style="height:${d.total ? Math.max(Math.round(d.total / maxDay * 150), 6) : 6}px"></div></div>
+                    <span class="bar-label">${d.label}</span>
+                  </div>`).join("")}
+              </div>
+              ${hasSales ? "" : `<p class="msg" style="text-align:center;margin:.8rem 0 0">No sales in the last 7 days</p>`}
+            </div>
+
+            <div class="panel">
+              <h3>Top selling products</h3>
+              ${top.length ? top.map(t => `
+                <div class="top-item">
+                  <img class="thumb" src="${t.product.imageUrl || 'https://placehold.co/40x52?text=+'}">
+                  <span class="grow"><span class="item-name">${t.product.productName}</span><small>${t.qty} sold</small></span>
+                </div>`).join("") : "<p class='msg'>No sales yet.</p>"}
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Recent orders</h3>
+            ${recent.length ? `
+              <div class="table-wrap">
+                <table class="orders-table compact">
+                  <thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th></tr></thead>
+                  <tbody>
+                    ${recent.map(o => `
+                      <tr>
+                        <td><b>#${o.orderId}</b><span class="sub">${new Date(o.orderDate).toLocaleDateString()}</span></td>
+                        <td>${esc(o.customerName)}</td>
+                        <td class="num">₹${o.totalAmount}</td>
+                        <td><span class="pill">${o.status}</span></td>
+                      </tr>`).join("")}
+                  </tbody>
+                </table>
+              </div>` : "<p class='msg'>No orders yet.</p>"}
+          </div>`;
+      } catch (e) {
+        p.innerHTML = "<h2>Dashboard</h2><p class='msg'>Could not load data. Check that the backend is running.</p>";
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // 4. PAGES
+    // ---------------------------------------------------------------
+    async function tab(t) {
+      const p = $("panel");
+
+      if (t === "dashboard") {
+        await renderDashboard(p);
+
+      } else if (t === "categories") {
+        await renderCategories(p);
+
+      } else if (t === "packing") {
+        await renderPacking(p);
+
+      } else if (t === "cancellations") {
+        await renderCancellations(p);
+
+      } else if (t === "returns") {
+        await renderReturns(p);
+
+      } else if (t === "coupons") {
+        await renderOffers(p);
+
+      } else if (t === "content") {
+        await renderContent(p);
+
+      } else if (t === "banners") {
+        await renderBanners(p);
+
+      } else if (t === "sales") {
+        await renderSalesReport(p);
+
+      } else if (t === "delivery") {
+        await renderDeliveryStats(p);
+
+      } else if (t === "marketing") {
+        await renderMarketing(p);
+
+      } else if (COMING[t]) {
+        const [step, text] = COMING[t];
+        p.innerHTML = `
+          <h2>${LABELS[t]}</h2>
+          <div class="panel coming">
+            <span class="pill">${step}</span>
+            <p>${text}</p>
+            <p class="msg">This page is not built yet. We will build it in ${step}.</p>
+          </div>`;
+
+      } else if (t === "products") {
+        await renderProductList(p);
+
+      } else if (t === "customers") {
+        const r = await fetch(`${API}/customer/admin/all`);
+        if (!r.ok) {
+          p.innerHTML = "<h2>Customers</h2><p class='msg'>Add the getAllCustomers methods to the backend (see ADD_TO_EXISTING_FILES.txt).</p>";
+          return;
+        }
+        const c = await r.json();
+        p.innerHTML = `<h2>Customers <span class="count">${c.length}</span></h2>` + (c.length ? `
+          <div class="table-wrap">
+            <table class="orders-table">
+              <thead>
+                <tr><th>#</th><th>Name</th><th>Username</th><th>Phone</th><th>Address</th><th>Joined</th></tr>
+              </thead>
+              <tbody>
+                ${c.map(x => `
+                  <tr>
+                    <td>${x.customerId}</td>
+                    <td><span class="item-name">${esc(x.name)}</span></td>
+                    <td>${esc(x.username)}</td>
+                    <td>${esc(x.phoneNumber || "—")}</td>
+                    <td>${esc(x.address || "—")}</td>
+                    <td>${x.createdAt ? new Date(x.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No customers yet.</p>");
+
+      } else if (t === "orders") {
+        const o = await (await fetch(`${API}/orders/admin/all`)).json();
+        await attachItems(o);
+
+        const S = ["PENDING", "CONFIRMED", "PREPARING", "SHIPPED", "DELIVERED"];
+        p.innerHTML = `<h2>All Orders <span class="count">${o.length}</span></h2>` + (o.length ? `
+          <div class="table-wrap">
+            <table class="orders-table wide-table">
+              <thead>
+                <tr><th>Order</th><th>Customer</th><th>Items</th><th>Address</th><th>Payment</th><th>Total</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                ${[...o].reverse().map(x => {
+                  const paid = x.paymentStatus === "PAID";
+                  return `
+                  <tr>
+                    <td><b>#${x.orderId}</b><span class="sub">${new Date(x.orderDate).toLocaleDateString()}</span></td>
+                    <td>${esc(x.customerName)}<span class="sub">${esc(x.phoneNumber)}</span></td>
+                    <td>${x.itemsHtml}</td>
+                    <td>${esc(x.address)}</td>
+                    <td>
+                      ${payPill(x)}
+                      ${x.paymentReference ? `<span class="sub">Ref ${esc(x.paymentReference)}</span>` : ""}
+                      ${x.status !== "CANCELLED" && (paid || !x.paymentStatus || x.paymentStatus === "PENDING")
+                        ? `<button class="ghost sm" onclick="togglePaid(${x.orderId}, '${x.paymentStatus}')">${paid ? "Mark unpaid" : "Mark paid"}</button>` : ""}
+                    </td>
+                    <td class="num">₹${x.totalAmount}${x.discountAmount > 0 ? `<span class="sub">Coupon ${esc(x.couponCode)}: −₹${x.discountAmount}</span>` : ""}</td>
+                    <td>
+                      ${x.status === "CANCELLED"
+                        ? `<span class="pill pill-cancel">CANCELLED</span>`
+                        : `<select onchange="setStatus(${x.orderId}, this.value)">
+                             ${S.map(st => `<option ${st === x.status ? "selected" : ""}>${st}</option>`).join("")}
+                           </select>`}
+                      ${x.returnStatus ? `<span class="sub">Return: ${x.returnStatus.toLowerCase()}</span>` : ""}
+                    </td>
+                    <td class="cell-actions">
+                      ${BILL_READY.includes(x.status) ? `<button class="ghost sm" onclick="window.open('invoice.html?id=${x.orderId}', '_blank')">🧾 Bill</button>` : ""}
+                      ${["PENDING", "CONFIRMED", "PREPARING"].includes(x.status) ? `<button class="ghost sm danger" onclick="adminCancel(${x.orderId})">Cancel</button>` : ""}
+                    </td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No orders yet.</p>");
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // CATEGORIES  (Step 2)
+    // ---------------------------------------------------------------
+    let catList = [];
+    const esc = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+    // dropdowns used by the product form
+    function fillCategorySelect(selected) {
+      const mains = catList.filter(c => c.parentId == null);
+      const known = mains.some(c => c.name === selected);
+      $("catSel").innerHTML = `<option value="">Select category</option>` +
+        mains.map(c => `<option value="${esc(c.name)}" ${c.name === selected ? "selected" : ""}>${c.name}</option>`).join("") +
+        // an old value that is not in the Category table yet is kept, so editing never wipes it
+        (selected && !known ? `<option value="${esc(selected)}" selected>${selected}</option>` : "");
+    }
+
+    function fillSubSelect(catName, selected) {
+      const main = catList.find(c => c.parentId == null && c.name === catName);
+      const subs = main ? catList.filter(c => c.parentId === main.categoryId) : [];
+      const known = subs.some(c => c.name === selected);
+      $("subSel").innerHTML = `<option value="">No subcategory</option>` +
+        subs.map(c => `<option value="${esc(c.name)}" ${c.name === selected ? "selected" : ""}>${c.name}</option>`).join("") +
+        (selected && !known ? `<option value="${esc(selected)}" selected>${selected}</option>` : "");
+    }
+
+    async function renderCategories(p) {
+      const [cats, prods] = await Promise.all([
+        fetch(`${API}/categories`).then(r => r.json()),
+        fetch(`${API}/products`).then(r => r.json())
+      ]);
+      const mains = cats.filter(c => c.parentId == null);
+      const subsOf = id => cats.filter(c => c.parentId === id);
+      const countMain = name => prods.filter(x => x.category === name).length;
+      const countSub = (main, sub) => prods.filter(x => x.category === main && x.subcategory === sub).length;
+
+      p.innerHTML = `
+        <h2>Categories <span class="count">${mains.length}</span></h2>
+        <form id="catForm" class="form inline-form">
+          <input id="newCat" placeholder="New category (e.g. Sarees)" required>
+          <button>+ Add category</button>
+        </form>
+        ${mains.length ? `
+          <div class="table-wrap">
+            <table class="orders-table compact">
+              <thead><tr><th>Name</th><th>Products</th><th></th></tr></thead>
+              <tbody>
+                ${mains.map(m => `
+                  <tr class="cat-main">
+                    <td><span class="item-name">${m.name}</span></td>
+                    <td>${countMain(m.name)}</td>
+                    <td class="actions">
+                      <button class="ghost sm" data-act="sub" data-id="${m.categoryId}" data-name="${esc(m.name)}">+ Subcategory</button>
+                      <button class="ghost sm" data-act="rename" data-id="${m.categoryId}" data-name="${esc(m.name)}">Rename</button>
+                      <button class="ghost sm danger" data-act="delete" data-id="${m.categoryId}" data-name="${esc(m.name)}">Delete</button>
+                    </td>
+                  </tr>
+                  ${subsOf(m.categoryId).map(s => `
+                  <tr class="cat-sub">
+                    <td>↳ ${s.name}</td>
+                    <td>${countSub(m.name, s.name)}</td>
+                    <td class="actions">
+                      <button class="ghost sm" data-act="rename" data-id="${s.categoryId}" data-name="${esc(s.name)}">Rename</button>
+                      <button class="ghost sm danger" data-act="delete" data-id="${s.categoryId}" data-name="${esc(s.name)}">Delete</button>
+                    </td>
+                  </tr>`).join("")}`).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No categories yet. Add your first category above.</p>"}`;
+
+      $("catForm").onsubmit = async e => {
+        e.preventDefault();
+        await catCall(`${API}/categories/admin/add?name=${encodeURIComponent($("newCat").value)}`, "POST");
+        tab("categories");
+      };
+      p.querySelectorAll("[data-act]").forEach(b => b.onclick = () => catAction(b.dataset));
+    }
+
+    // ---------------------------------------------------------------
+    // ORDER MANAGEMENT  (Step 3): Packing & Dispatch, Cancellations, Returns
+    // ---------------------------------------------------------------
+    // the button the admin sees for each status, and where it moves the order
+    const NEXT = {
+      PENDING:   ["CONFIRMED", "Confirm order"],
+      CONFIRMED: ["PREPARING", "Start packing"],
+      PREPARING: ["SHIPPED",   "Dispatch"],
+      SHIPPED:   ["DELIVERED", "Mark delivered"]
+    };
+    const PACK_STAGES = [["ACTIVE", "All active"], ["PENDING", "New"], ["CONFIRMED", "To pack"], ["PREPARING", "Packing"], ["SHIPPED", "Dispatched"]];
+    const RETURN_LABEL = { REQUESTED: "Requested", APPROVED: "Approved", REJECTED: "Rejected", RECEIVED: "Received" };
+    let packFilter = "ACTIVE";
+
+    function payPill(x) {
+      const m = x.paymentMethod || "COD";
+      if (x.paymentStatus === "PAID") return `<span class="pill pill-paid">${m} · Paid</span>`;
+      if (x.paymentStatus === "REFUND_PENDING") return `<span class="pill pill-refund">${m} · Refund pending</span>`;
+      if (x.paymentStatus === "REFUNDED") return `<span class="pill pill-refunded">${m} · Refunded</span>`;
+      return `<span class="pill pill-pending">${m} · Pending</span>`;
+    }
+
+    const refundButton = x => x.paymentStatus === "REFUND_PENDING"
+      ? `<button class="ghost sm primary" onclick="markRefunded(${x.orderId})">Mark refunded</button>` : "";
+
+    // adds "itemsHtml" (dress, size, quantity) to every order in the list
+    async function attachItems(list) {
+      const its = await Promise.all(list.map(x => fetch(`${API}/orders/${x.orderId}/items`).then(r => r.json())));
+      list.forEach((x, i) => {
+        x.itemsHtml = its[i].map(it =>
+          `<div class="item-line"><span class="item-name">${esc(it.product.productName)}</span>${it.size ? " (" + esc(it.size) + ")" : ""} × ${it.quantity}</div>`
+        ).join("");
+      });
+    }
+
+    // calls the backend; if it says no, the reason is shown
+    // a readable message for a failed call (the server's own message if it sent one)
+    async function errText(r) {
+      const t = await r.text();
+      if (t && t.length < 250 && !t.trim().startsWith("{") && !t.trim().startsWith("<")) return t;
+      return `Server error (${r.status}). Look at the Eclipse console for the reason.`;
+    }
+
+    async function adminCall(url, method) {
+      const r = await fetch(url, { method });
+      if (!r.ok) showError(await errText(r));
+      return r.ok;
+    }
+
+    async function changeStatus(id, status, tracking) {
+      let url = `${API}/orders/admin/status/${id}?status=${status}`;
+      if (tracking) url += `&trackingInfo=${encodeURIComponent(tracking)}`;
+      const ok = await adminCall(url, "PUT");
+      // the bill opens by itself the first time packing starts
+      if (ok && status === "PREPARING") window.open(`invoice.html?id=${id}`, "_blank");
+      return ok;
+    }
+
+    async function advance(id, status) {
+      const next = NEXT[status][0];
+      let tracking = "";
+      if (next === "SHIPPED") {
+        tracking = await askText(`Dispatch order #${id}`, "Courier name / tracking number (optional)", { placeholder: "e.g. DTDC 123456789" });
+        if (tracking === null) return;            // admin pressed Cancel
+      }
+      await changeStatus(id, next, tracking);
+      tab(route);
+    }
+
+    async function adminCancel(id) {
+      const reason = await askText(`Cancel order #${id}`, "Reason for cancelling (the customer can see this)");
+      if (reason === null) return;
+      await adminCall(`${API}/orders/admin/cancel/${id}?reason=${encodeURIComponent(reason)}`, "PUT");
+      tab(route);
+    }
+
+    async function returnAction(id, action) {
+      if (action === "REJECT" && !(await askConfirm("Reject return", "Reject this return request?", { okText: "Reject", danger: true }))) return;
+      await adminCall(`${API}/orders/admin/return/${id}?action=${action}`, "PUT");
+      tab(route);
+    }
+
+    async function markRefunded(id) {
+      if (!(await askConfirm("Mark as refunded", "Have you sent the refund to the customer?", { okText: "Yes, refunded" }))) return;
+      await adminCall(`${API}/orders/admin/payment/${id}?status=REFUNDED`, "PUT");
+      tab(route);
+    }
+
+    // ---------- Packing & Dispatch ----------
+    async function renderPacking(p) {
+      const all = await fetch(`${API}/orders/admin/all`).then(r => r.json());
+      const active = all.filter(o => NEXT[o.status]);                 // PENDING, CONFIRMED, PREPARING, SHIPPED
+      const countOf = st => st === "ACTIVE" ? active.length : active.filter(o => o.status === st).length;
+      const shown = [...(packFilter === "ACTIVE" ? active : active.filter(o => o.status === packFilter))].reverse();
+      await attachItems(shown);
+
+      p.innerHTML = `
+        <h2>Packing &amp; Dispatch <span class="count">${active.length}</span></h2>
+        <div class="filter-row">
+          ${PACK_STAGES.map(([k, l]) => `<button class="filter-pill ${packFilter === k ? "active" : ""}" data-pf="${k}">${l} (${countOf(k)})</button>`).join("")}
+        </div>
+        ${shown.length ? `
+          <div class="table-wrap">
+            <table class="orders-table wide-table">
+              <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Address</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                ${shown.map(o => `
+                  <tr>
+                    <td><b>#${o.orderId}</b><span class="sub">${new Date(o.orderDate).toLocaleDateString()}</span></td>
+                    <td>${esc(o.customerName)}<span class="sub">${esc(o.phoneNumber)}</span></td>
+                    <td>${o.itemsHtml}</td>
+                    <td>${esc(o.address)}</td>
+                    <td><span class="pill">${o.status}</span>${o.trackingInfo ? `<span class="sub">Tracking: ${esc(o.trackingInfo)}</span>` : ""}</td>
+                    <td class="cell-actions">
+                      <button class="ghost sm primary" onclick="advance(${o.orderId}, '${o.status}')">${NEXT[o.status][1]}</button>
+                      ${o.status !== "SHIPPED" ? `<button class="ghost sm danger" onclick="adminCancel(${o.orderId})">Cancel</button>` : ""}
+                    </td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No orders in this stage.</p>"}`;
+
+      p.querySelectorAll("[data-pf]").forEach(b => b.onclick = () => { packFilter = b.dataset.pf; renderPacking(p); });
+    }
+
+    // ---------- Cancellations ----------
+    async function renderCancellations(p) {
+      const all = await fetch(`${API}/orders/admin/all`).then(r => r.json());
+      const list = all.filter(o => o.status === "CANCELLED").reverse();
+      await attachItems(list);
+
+      p.innerHTML = `<h2>Cancellations <span class="count">${list.length}</span></h2>` + (list.length ? `
+        <div class="table-wrap">
+          <table class="orders-table wide-table">
+            <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Cancelled by</th><th>Reason</th><th>Total</th><th>Refund</th></tr></thead>
+            <tbody>
+              ${list.map(o => `
+                <tr>
+                  <td><b>#${o.orderId}</b><span class="sub">${new Date(o.orderDate).toLocaleDateString()}</span></td>
+                  <td>${esc(o.customerName)}<span class="sub">${esc(o.phoneNumber)}</span></td>
+                  <td>${o.itemsHtml}</td>
+                  <td>${o.cancelledBy === "CUSTOMER" ? "Customer" : "Admin"}${o.cancelledAt ? `<span class="sub">${new Date(o.cancelledAt).toLocaleDateString()}</span>` : ""}</td>
+                  <td>${esc(o.cancelReason || "—")}</td>
+                  <td class="num">₹${o.totalAmount}</td>
+                  <td class="cell-actions">${payPill(o)}${refundButton(o)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>` : "<p class='msg'>No cancelled orders.</p>");
+    }
+
+    // ---------- Returns ----------
+    function returnButtons(o) {
+      if (o.returnStatus === "REQUESTED") {
+        return `<button class="ghost sm primary" onclick="returnAction(${o.orderId}, 'APPROVE')">Approve</button>
+                <button class="ghost sm danger" onclick="returnAction(${o.orderId}, 'REJECT')">Reject</button>`;
+      }
+      if (o.returnStatus === "APPROVED") {
+        return `<button class="ghost sm primary" onclick="returnAction(${o.orderId}, 'RECEIVED')">Received back</button>`;
+      }
+      return refundButton(o);
+    }
+
+    async function renderReturns(p) {
+      const all = await fetch(`${API}/orders/admin/all`).then(r => r.json());
+      const list = all.filter(o => o.returnStatus).reverse();
+      await attachItems(list);
+
+      p.innerHTML = `<h2>Returns <span class="count">${list.length}</span></h2>` + (list.length ? `
+        <div class="table-wrap">
+          <table class="orders-table wide-table">
+            <thead><tr><th>Order</th><th>Customer</th><th>Items</th><th>Reason</th><th>Total</th><th>Return</th><th>Refund</th><th></th></tr></thead>
+            <tbody>
+              ${list.map(o => `
+                <tr>
+                  <td><b>#${o.orderId}</b>${o.returnRequestedAt ? `<span class="sub">Asked ${new Date(o.returnRequestedAt).toLocaleDateString()}</span>` : ""}</td>
+                  <td>${esc(o.customerName)}<span class="sub">${esc(o.phoneNumber)}</span></td>
+                  <td>${o.itemsHtml}</td>
+                  <td>${esc(o.returnReason || "—")}</td>
+                  <td class="num">₹${o.totalAmount}</td>
+                  <td><span class="pill pill-return">${RETURN_LABEL[o.returnStatus] || o.returnStatus}</span>${o.returnStatus === "APPROVED" ? `<span class="sub">Waiting for the parcel</span>` : ""}</td>
+                  <td>${payPill(o)}</td>
+                  <td class="cell-actions">${returnButtons(o)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>` : "<p class='msg'>No return requests yet.</p>");
+    }
+
+    // ---------------------------------------------------------------
+    // OFFERS  (Step 4): coupon codes + product discounts
+    // ---------------------------------------------------------------
+    let offerTab = "coupons";
+    const fmtDate = s => s ? s.split("-").reverse().join("/") : "—";      // 2026-12-31 -> 31/12/2026
+    const todayStr = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+
+    async function renderOffers(p) {
+      p.innerHTML = `
+        <h2>Coupons &amp; Discounts</h2>
+        <div class="filter-row">
+          <button class="filter-pill ${offerTab === "coupons" ? "active" : ""}" data-ot="coupons">Coupon codes</button>
+          <button class="filter-pill ${offerTab === "discounts" ? "active" : ""}" data-ot="discounts">Product discounts</button>
+        </div>
+        <div id="offerBody"></div>`;
+      p.querySelectorAll("[data-ot]").forEach(b => b.onclick = () => { offerTab = b.dataset.ot; renderOffers(p); });
+      if (offerTab === "coupons") await renderCoupons($("offerBody"));
+      else await renderDiscounts($("offerBody"));
+    }
+
+    // ---------- coupon codes ----------
+    async function renderCoupons(box) {
+      const list = await fetch(`${API}/coupons/admin/all`).then(r => r.json());
+      const now = todayStr();
+      const statusOf = c => !c.active ? ["Disabled", ""]
+        : c.expiryDate < now ? ["Expired", "pill-cancel"]
+        : (c.usageLimit != null && c.usedCount >= c.usageLimit) ? ["Used up", "pill-refund"]
+        : ["Active", "pill-paid"];
+
+      box.innerHTML = `
+        <form id="cpForm" class="form grid">
+          <input name="code" placeholder="Code (e.g. WELCOME10)" maxlength="20" required>
+          <select name="discountType">
+            <option value="PERCENT">Percent off (%)</option>
+            <option value="FLAT">Flat amount off (₹)</option>
+          </select>
+          <input name="discountValue" type="number" step="0.01" min="1" placeholder="Value (10 = 10% or ₹10)" required>
+          <input name="minOrderAmount" type="number" step="0.01" min="0" placeholder="Minimum order ₹ (optional)">
+          <input name="maxDiscount" type="number" step="0.01" min="0" placeholder="Max discount ₹ (optional, for %)">
+          <input name="usageLimit" type="number" min="1" placeholder="Usage limit (optional)">
+          <label class="field">Expires on <input name="expiryDate" type="date" min="${now}" required></label>
+          <button>Create coupon</button>
+        </form>
+        ${list.length ? `
+          <div class="table-wrap">
+            <table class="orders-table wide-table">
+              <thead><tr><th>Code</th><th>Discount</th><th>Min order</th><th>Used</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                ${[...list].reverse().map(c => {
+                  const [label, cls] = statusOf(c);
+                  return `
+                  <tr>
+                    <td><span class="item-name">${esc(c.code)}</span></td>
+                    <td>${c.discountType === "PERCENT" ? c.discountValue + "% off" + (c.maxDiscount ? ` <span class="sub">max ₹${c.maxDiscount}</span>` : "") : "₹" + c.discountValue + " off"}</td>
+                    <td>${c.minOrderAmount ? "₹" + c.minOrderAmount : "—"}</td>
+                    <td>${c.usedCount}${c.usageLimit ? " / " + c.usageLimit : ""}</td>
+                    <td>${fmtDate(c.expiryDate)}</td>
+                    <td><span class="pill ${cls}">${label}</span></td>
+                    <td class="cell-actions">
+                      <button class="ghost sm" data-tg="${c.couponId}">${c.active ? "Disable" : "Enable"}</button>
+                      <button class="ghost sm danger" data-dl="${c.couponId}" data-code="${esc(c.code)}">Delete</button>
+                    </td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No coupons yet. Create your first one above.</p>"}`;
+
+      $("cpForm").onsubmit = async e => {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(e.target));
+        const body = {
+          code: d.code, discountType: d.discountType, discountValue: +d.discountValue,
+          minOrderAmount: d.minOrderAmount ? +d.minOrderAmount : null,
+          maxDiscount: d.maxDiscount ? +d.maxDiscount : null,
+          usageLimit: d.usageLimit ? +d.usageLimit : null,
+          expiryDate: d.expiryDate
+        };
+        const r = await fetch(`${API}/coupons/admin/add`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+        });
+        if (!r.ok) { showError(await errText(r)); return; }
+        toast("Coupon created");
+        renderOffers($("panel"));
+      };
+      box.querySelectorAll("[data-tg]").forEach(b => b.onclick = async () => {
+        await adminCall(`${API}/coupons/admin/toggle/${b.dataset.tg}`, "PUT");
+        renderOffers($("panel"));
+      });
+      box.querySelectorAll("[data-dl]").forEach(b => b.onclick = async () => {
+        if (!(await askConfirm("Delete coupon", `Delete coupon ${b.dataset.code}?`, { okText: "Delete", danger: true }))) return;
+        await adminCall(`${API}/coupons/admin/delete/${b.dataset.dl}`, "DELETE");
+        renderOffers($("panel"));
+      });
+    }
+
+    // ---------- product discounts ----------
+    async function renderDiscounts(box) {
+      const [prods, cats] = await Promise.all([
+        fetch(`${API}/products`).then(r => r.json()),
+        fetch(`${API}/categories`).then(r => r.json())
+      ]);
+      const mains = cats.filter(c => c.parentId == null);
+      const withOffer = prods.filter(x => x.discountPercent);
+      const now = todayStr();
+
+      box.innerHTML = `
+        <form id="dsForm" class="form grid">
+          <select id="dsType">
+            <option value="product">Apply to: one product</option>
+            <option value="category">Apply to: a whole category</option>
+          </select>
+          <select id="dsTarget"></select>
+          <input id="dsPercent" type="number" min="1" max="90" placeholder="Discount % (1 to 90)" required>
+          <label class="field">Offer ends on <input id="dsEnd" type="date" min="${now}" required></label>
+          <button>Apply offer</button>
+          <button type="button" class="ghost danger" id="dsRemove">Remove the offer from the selected product / category</button>
+        </form>
+        <p class="msg">An offer stops by itself after its end date. You do not need to remove it.</p>
+        ${withOffer.length ? `
+          <div class="table-wrap">
+            <table class="orders-table compact">
+              <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Offer</th><th>Ends</th><th>Status</th></tr></thead>
+              <tbody>
+                ${withOffer.map(x => `
+                  <tr>
+                    <td><span class="item-name">${esc(x.productName)}</span></td>
+                    <td>${esc(x.category || "—")}</td>
+                    <td>${x.offerActive ? `<span class="old-price">₹${x.price}</span>₹${x.effectivePrice}` : "₹" + x.price}</td>
+                    <td>${x.discountPercent}% off</td>
+                    <td>${fmtDate(x.offerEndDate)}</td>
+                    <td><span class="pill ${x.offerActive ? "pill-paid" : "pill-cancel"}">${x.offerActive ? "Active" : "Expired"}</span></td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No product offers yet.</p>"}`;
+
+      const fillTarget = () => {
+        $("dsTarget").innerHTML = $("dsType").value === "product"
+          ? prods.map(x => `<option value="${x.productId}">${esc(x.productName)}</option>`).join("")
+          : mains.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+      };
+      fillTarget();
+      $("dsType").onchange = fillTarget;
+
+      $("dsForm").onsubmit = async e => {
+        e.preventDefault();
+        const qs = `percent=${$("dsPercent").value}&endDate=${$("dsEnd").value}`;
+        const t = $("dsTarget").value;
+        const url = $("dsType").value === "product"
+          ? `${API}/offers/admin/product/${t}?${qs}`
+          : `${API}/offers/admin/category?category=${encodeURIComponent(t)}&${qs}`;
+        if (await adminCall(url, "PUT")) { toast("Offer applied"); renderOffers($("panel")); }
+      };
+
+      $("dsRemove").onclick = async () => {
+        const t = $("dsTarget").value;
+        const url = $("dsType").value === "product"
+          ? `${API}/offers/admin/product/${t}`
+          : `${API}/offers/admin/category?category=${encodeURIComponent(t)}`;
+        if (await adminCall(url, "DELETE")) { toast("Offer removed"); renderOffers($("panel")); }
+      };
+    }
+
+    // ---------------------------------------------------------------
+    // CONTENT MANAGEMENT  (Step 5): website text + banners
+    // ---------------------------------------------------------------
+    // [key, label, number of lines (1 = a single line box), hint]
+    const CONTENT_FIELDS = [
+      ["shop_name",       "Shop name (printed on invoices)", 1, ""],
+      ["hero_title",      "Home page heading", 2, "A new line makes a line break."],
+      ["hero_subtitle",   "Home page sub text", 2, ""],
+      ["hero_phrases",    "Rotating lines above the heading", 7, "One line for each phrase. They change every few seconds."],
+      ["about_title",     "About page title", 1, ""],
+      ["about_text",      "About page text", 8, "Leave an empty line between paragraphs."],
+      ["contact_email",   "Contact email", 1, ""],
+      ["contact_phone",   "Contact phone", 1, ""],
+      ["contact_address", "Shop address (also printed on invoices)", 1, ""],
+      ["footer_text",     "Footer text", 1, ""]
+    ];
+
+    async function renderContent(p) {
+      const saved = await fetch(`${API}/content`).then(r => r.json());
+      const v = { ...SITE_DEFAULTS, ...saved };
+
+      p.innerHTML = `
+        <h2>Website Content</h2>
+        <p class="msg">Change the words customers see on the home page, the About page, the footer and your invoices.
+          Product descriptions are in Product Management, Products, Edit.</p>
+        <form id="ctForm" class="form">
+          ${CONTENT_FIELDS.map(([key, label, rows, hint]) => `
+            <label class="field">${label}
+              ${rows === 1
+                ? `<input data-key="${key}" value="${esc(v[key])}">`
+                : `<textarea data-key="${key}" rows="${rows}">${esc(v[key])}</textarea>`}
+              ${hint ? `<span class="hint">${hint}</span>` : ""}
+            </label>`).join("")}
+          <button>Save changes</button>
+          <button type="button" class="ghost danger" id="ctReset">Reset everything to the original text</button>
+        </form>
+        <p class="msg">If you clear a box, the original text comes back. <a href="index.html" target="_blank">Open the website</a></p>`;
+
+      $("ctForm").onsubmit = async e => {
+        e.preventDefault();
+        const body = {};
+        p.querySelectorAll("[data-key]").forEach(el => {
+          const val = el.value.trim();
+          // text that is the same as the original is not stored
+          body[el.dataset.key] = val === SITE_DEFAULTS[el.dataset.key].trim() ? "" : val;
+        });
+        await saveContent(body);
+      };
+
+      $("ctReset").onclick = async () => {
+        if (!(await askConfirm("Reset website text", "Reset all website text to the original?", { okText: "Reset", danger: true }))) return;
+        const body = {};
+        CONTENT_FIELDS.forEach(f => body[f[0]] = "");
+        await saveContent(body);
+      };
+    }
+
+    async function saveContent(body) {
+      const r = await fetch(`${API}/content/admin/save`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+      });
+      if (!r.ok) { showError(await errText(r)); return; }
+      toast("Saved. The website now shows the new text.");
+      renderContent($("panel"));
+    }
+
+    // ---------- banners ----------
+    async function renderBanners(p) {
+      const list = await fetch(`${API}/banners/admin/all`).then(r => r.json());
+      const now = todayStr();
+      const statusOf = b => !b.active ? ["Hidden", ""]
+        : (b.endDate && b.endDate < now) ? ["Expired", "pill-cancel"]
+        : ["Live", "pill-paid"];
+
+      p.innerHTML = `
+        <h2>Banners <span class="count">${list.length}</span></h2>
+        <p class="msg">Banners slide at the top of the home page. Wide pictures (about 3 times wider than tall) look best.</p>
+        <form id="bnForm" class="form grid">
+          <label class="field" style="grid-column: 1 / -1">Banner picture (jpg, png or webp)
+            <input type="file" name="file" accept="image/*" required>
+          </label>
+          <input name="title" placeholder="Heading on the banner (optional)" maxlength="120">
+          <input name="subtitle" placeholder="Small text (optional)" maxlength="200">
+          <input name="linkUrl" placeholder="Click goes to (optional), e.g. index.html">
+          <label class="field">Show until (optional) <input name="endDate" type="date" min="${now}"></label>
+          <button>Add banner</button>
+        </form>
+        ${list.length ? `
+          <div class="table-wrap">
+            <table class="orders-table wide-table">
+              <thead><tr><th>#</th><th>Banner</th><th>Link</th><th>Shown until</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                ${list.map((b, i) => {
+                  const [label, cls] = statusOf(b);
+                  return `
+                  <tr>
+                    <td>${i + 1}</td>
+                    <td>
+                      <img class="banner-thumb" src="${esc(b.imageUrl)}" alt="">
+                      ${b.title ? `<b>${esc(b.title)}</b>` : ""}${b.subtitle ? `<span class="sub">${esc(b.subtitle)}</span>` : ""}
+                    </td>
+                    <td>${b.linkUrl ? esc(b.linkUrl) : "—"}</td>
+                    <td>${fmtDate(b.endDate)}</td>
+                    <td><span class="pill ${cls}">${label}</span></td>
+                    <td class="cell-actions">
+                      <button class="ghost sm" data-bn="up:${b.bannerId}" ${i === 0 ? "disabled" : ""}>↑ Move up</button>
+                      <button class="ghost sm" data-bn="down:${b.bannerId}" ${i === list.length - 1 ? "disabled" : ""}>↓ Move down</button>
+                      <button class="ghost sm" data-bn="toggle:${b.bannerId}">${b.active ? "Hide" : "Show"}</button>
+                      <button class="ghost sm danger" data-bn="delete:${b.bannerId}">Delete</button>
+                    </td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>` : "<p class='msg'>No banners yet. Add your first one above.</p>"}`;
+
+      $("bnForm").onsubmit = async e => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        if (!fd.get("endDate")) fd.delete("endDate");
+        const r = await fetch(`${API}/banners/admin/add`, { method: "POST", body: fd });
+        if (!r.ok) { showError(await errText(r)); return; }
+        toast("Banner added");
+        renderBanners(p);
+      };
+
+      p.querySelectorAll("[data-bn]").forEach(b => b.onclick = async () => {
+        const [act, id] = b.dataset.bn.split(":");
+        let url, method;
+        if (act === "up" || act === "down") { url = `${API}/banners/admin/move/${id}?direction=${act}`; method = "PUT"; }
+        else if (act === "toggle") { url = `${API}/banners/admin/toggle/${id}`; method = "PUT"; }
+        else {
+          if (!(await askConfirm("Delete banner", "Delete this banner?", { okText: "Delete", danger: true }))) return;
+          url = `${API}/banners/admin/delete/${id}`; method = "DELETE";
+        }
+        await adminCall(url, method);
+        renderBanners(p);
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // PRODUCTS: a table, and a "+ Add product" form that opens on top
+    // ---------------------------------------------------------------
+    let productCache = [];
+    let productFilter = "";
+
+    async function renderProductList(p) {
+      const [list, cats] = await Promise.all([
+        fetch(`${API}/products`).then(r => r.json()),
+        fetch(`${API}/categories`).then(r => r.json())
+      ]);
+      productCache = list;
+      catList = cats;
+
+      p.innerHTML = `
+        <div class="page-head">
+          <h2>Products <span class="count">${list.length}</span></h2>
+          <button class="btn" id="addProd">+ Add product</button>
+        </div>
+        ${cats.length ? "" : "<p class='msg'>No categories yet. Create them first in Product Management, Categories.</p>"}
+        <div class="table-tools">
+          <input id="prodSearch" class="search" placeholder="Search products…" value="${esc(productFilter)}">
+        </div>
+        <div id="prodTable"></div>`;
+
+      $("addProd").onclick = () => openProductForm(null);
+      $("prodSearch").oninput = e => { productFilter = e.target.value; drawProductTable(); };
+      drawProductTable();
+    }
+
+    function drawProductTable() {
+      const q = productFilter.trim().toLowerCase();
+      const rows = productCache.filter(x =>
+        !q || [x.productName, x.category, x.subcategory, x.color, x.size].join(" ").toLowerCase().includes(q));
+
+      $("prodTable").innerHTML = rows.length ? `
+        <div class="table-wrap">
+          <table class="orders-table wide-table">
+            <thead>
+              <tr><th>Photo</th><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Sizes</th><th>Colors</th><th></th></tr>
+            </thead>
+            <tbody>
+              ${rows.map(x => `
+                <tr>
+                  <td><img class="thumb" src="${esc(x.imageUrl || "https://placehold.co/48x64?text=+")}" alt=""></td>
+                  <td><span class="item-name">${esc(x.productName)}</span>${x.description ? `<span class="sub clip">${esc(x.description)}</span>` : ""}</td>
+                  <td>${esc(x.category || "—")}${x.subcategory ? `<span class="sub">${esc(x.subcategory)}</span>` : ""}</td>
+                  <td class="num">${x.offerActive
+                      ? `<span class="old-price">₹${x.price}</span>₹${x.effectivePrice}<span class="sub">${x.discountPercent}% off till ${fmtDate(x.offerEndDate)}</span>`
+                      : "₹" + x.price}</td>
+                  <td>${x.stock === 0 ? `<span class="pill pill-cancel">Out of stock</span>`
+                      : x.stock <= 5 ? `<span class="pill pill-refund">${x.stock} left</span>` : x.stock}</td>
+                  <td>${esc(x.size || "—")}</td>
+                  <td>${esc(x.color || "—")}</td>
+                  <td class="cell-actions">
+                    <button class="ghost sm" data-pe="${x.productId}">Edit</button>
+                    <button class="ghost sm danger" data-pd="${x.productId}">Delete</button>
+                  </td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>` : "<p class='msg'>No products found.</p>";
+
+      $("prodTable").querySelectorAll("[data-pe]").forEach(b => b.onclick = () =>
+        openProductForm(productCache.find(x => x.productId === +b.dataset.pe)));
+      $("prodTable").querySelectorAll("[data-pd]").forEach(b => b.onclick = () => del(+b.dataset.pd));
+    }
+
+    // prod = null  -> "Add product"      prod = a product -> "Edit product"
+    function openProductForm(prod) {
+      const editing = !!prod;
+      const v = prod || {};
+
+      const m = openModal(editing ? "Edit product" : "Add product", `
+        <form id="pf" class="form grid">
+          <label class="field">Product name <input name="productName" value="${esc(v.productName || "")}" required></label>
+          <label class="field">Price (₹) <input name="price" type="number" step="0.01" min="0" value="${v.price ?? ""}" required></label>
+          <label class="field">Stock <input name="stock" type="number" min="0" value="${v.stock ?? ""}" required></label>
+          <label class="field">Category <select name="category" id="catSel" required></select></label>
+          <label class="field">Subcategory <select name="subcategory" id="subSel"></select></label>
+          <label class="field">Sizes <input name="size" placeholder="S, M, L, XL" value="${esc(v.size || "")}"></label>
+          <label class="field" style="grid-column: 1 / -1">Colors (comma separated) <input name="color" placeholder="Red, Black" value="${esc(v.color || "")}"></label>
+          <label class="field" style="grid-column: 1 / -1">Description <textarea name="description" rows="3">${esc(v.description || "")}</textarea></label>
+          <label class="field" style="grid-column: 1 / -1">Picture (optional${editing ? ", choose a new one only to replace the current picture" : ""})
+            ${editing && v.imageUrl ? `<img class="thumb" src="${esc(v.imageUrl)}" alt="">` : ""}
+            <input type="file" name="photo" accept="image/*">
+          </label>
+          <button id="pfSubmit">${editing ? "Save changes" : "Add product"}</button>
+        </form>`, { wide: true });
+
+      fillCategorySelect(v.category || "");
+      fillSubSelect(v.category || "", v.subcategory || "");
+      $("catSel").onchange = () => fillSubSelect($("catSel").value, "");
+
+      $("pf").onsubmit = async e => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const photo = fd.get("photo");
+        const body = {
+          productName: fd.get("productName"),
+          price: +fd.get("price"),
+          stock: +fd.get("stock"),
+          category: fd.get("category"),
+          subcategory: fd.get("subcategory"),
+          size: fd.get("size"),
+          color: fd.get("color"),
+          description: fd.get("description"),
+          imageUrl: editing ? (v.imageUrl || "") : ""      // keep the current picture unless a new one is chosen
+        };
+
+        const r = await fetch(editing ? `${API}/products/admin/update/${v.productId}` : `${API}/products/admin/add`, {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!r.ok) { showError(await errText(r)); return; }
+        const saved = await r.json();
+
+        if (photo && photo.size > 0) {
+          const up = new FormData();
+          up.append("file", photo);
+          const ur = await fetch(`${API}/products/admin/image/${saved.productId}`, { method: "POST", body: up });
+          if (!ur.ok) showError("The product is saved, but the picture was not uploaded. Use jpg, png or webp, under 10 MB.");
+        }
+
+        m.close();
+        toast(editing ? "Product updated" : "Product added");
+        renderProductList($("panel"));
+      };
+    }
+
+    // ---------------------------------------------------------------
+    // REPORTS & ANALYTICS  (Step 6): sales, delivery stats, marketing
+    // ---------------------------------------------------------------
+    let reportRows = [];                  // [{ order, items }]  every order together with its dresses
+    let reportRange = "30";
+    let reportFrom = "", reportTo = "";
+    const RANGES = [["1", "Today"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["month", "This month"], ["all", "All time"], ["custom", "Custom dates"]];
+    const HOUR = 3600000, DAY = 24 * HOUR;
+    const startOfDay = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+
+    async function loadReportRows() {
+      const r = await fetch(`${API}/reports/admin/orders`);
+      if (!r.ok) throw new Error(await errText(r));
+      reportRows = await r.json();
+    }
+
+    // [start, end) of the chosen period. "end" is the start of tomorrow, so today is included.
+    function rangeBounds() {
+      const now = new Date();
+      const today = startOfDay(now);
+      const end = new Date(today); end.setDate(end.getDate() + 1);
+      const back = n => { const x = new Date(today); x.setDate(x.getDate() - n); return x; };
+
+      if (reportRange === "1") return [today, end];
+      if (reportRange === "7") return [back(6), end];
+      if (reportRange === "30") return [back(29), end];
+      if (reportRange === "month") return [new Date(now.getFullYear(), now.getMonth(), 1), end];
+      if (reportRange === "custom" && reportFrom && reportTo) {
+        const last = new Date(reportTo + "T00:00:00"); last.setDate(last.getDate() + 1);
+        return [new Date(reportFrom + "T00:00:00"), last];
+      }
+      return [new Date(0), end];           // all time
+    }
+    const inRange = row => { const [s, e] = rangeBounds(); const d = new Date(row.order.orderDate); return d >= s && d < e; };
+
+    function rangeBarHtml() {
+      return `
+        <div class="filter-row">
+          ${RANGES.map(([k, l]) => `<button class="filter-pill ${reportRange === k ? "active" : ""}" data-rg="${k}">${l}</button>`).join("")}
+        </div>
+        ${reportRange === "custom" ? `
+          <div class="range-custom">
+            <label class="field">From <input type="date" id="rgFrom" value="${reportFrom}"></label>
+            <label class="field">To <input type="date" id="rgTo" value="${reportTo}"></label>
+            <button class="btn" id="rgApply" type="button">Show</button>
+          </div>` : ""}`;
+    }
+
+    function wireRangeBar(root, redraw) {
+      root.querySelectorAll("[data-rg]").forEach(b => b.onclick = () => { reportRange = b.dataset.rg; redraw(); });
+      const apply = root.querySelector("#rgApply");
+      if (apply) apply.onclick = () => {
+        reportFrom = root.querySelector("#rgFrom").value;
+        reportTo = root.querySelector("#rgTo").value;
+        redraw();
+      };
+    }
+
+    const statCard = (icon, label, value, sub) => `
+      <div class="stat-card">
+        <div class="stat-icon">${icon}</div>
+        <div><div class="stat-label">${label}</div><div class="stat-value">${value}</div>${sub ? `<div class="stat-sub">${sub}</div>` : ""}</div>
+      </div>`;
+
+    // bar chart. points = [{ label, value }]
+    function barsHtml(points) {
+      const max = Math.max(...points.map(x => x.value), 1);
+      const many = points.length > 12;
+      const step = Math.ceil(points.length / 10);                  // with many bars, only some labels are written
+      return `<div class="bars ${many ? "dense" : ""}">` + points.map((x, i) => `
+        <div class="bar-col" title="${esc(x.label)}: ${money(x.value)}">
+          <span class="bar-val">${!many && x.value ? money(x.value) : ""}</span>
+          <div class="bar-track"><div class="bar" style="height:${x.value ? Math.max(Math.round(x.value / max * 150), 5) : 0}px"></div></div>
+          <span class="bar-label">${!many || i % step === 0 ? esc(x.label) : ""}</span>
+        </div>`).join("") + `</div>`;
+    }
+
+    const shareBar = pct => `<div class="share"><span style="width:${Math.max(pct, 1)}%"></span></div>`;
+    const sumOf = (list, f) => list.reduce((s, x) => s + f(x), 0);
+    const pctOf = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
+
+    // ---------- Sales Reports ----------
+    async function renderSalesReport(p) {
+      p.innerHTML = `<h2>Sales Reports</h2><p class="msg">Loading…</p>`;
+      try { await loadReportRows(); }
+      catch (e) { p.innerHTML = `<h2>Sales Reports</h2><p class="msg">Could not load the report. ${esc(e.message)}</p>`; return; }
+      drawSalesReport(p);
+    }
+
+    function salesSeries(live) {
+      const [s, e] = rangeBounds();
+      let from = s;
+      if (reportRange === "all") {
+        const first = live.length ? Math.min(...live.map(r => +new Date(r.order.orderDate))) : Date.now();
+        from = startOfDay(new Date(first));
+      }
+      const monthly = Math.round((e - from) / DAY) > 62;            // long periods are shown month by month
+      const buckets = new Map();
+
+      if (!monthly) {
+        for (let d = new Date(from); d < e; d.setDate(d.getDate() + 1)) {
+          buckets.set(dayKey(d), { label: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }), value: 0 });
+        }
+      } else {
+        for (let d = new Date(from.getFullYear(), from.getMonth(), 1); d < e; d.setMonth(d.getMonth() + 1)) {
+          buckets.set(`${d.getFullYear()}-${d.getMonth()}`, { label: d.toLocaleDateString("en-IN", { month: "short", year: "2-digit" }), value: 0 });
+        }
+      }
+      live.forEach(r => {
+        const d = new Date(r.order.orderDate);
+        const b = buckets.get(monthly ? `${d.getFullYear()}-${d.getMonth()}` : dayKey(d));
+        if (b) b.value += Number(r.order.totalAmount);
+      });
+      return { points: [...buckets.values()], monthly };
+    }
+
+    function drawSalesReport(p) {
+      const rows = reportRows.filter(inRange);
+      const live = rows.filter(r => r.order.status !== "CANCELLED");
+      const cancelled = rows.filter(r => r.order.status === "CANCELLED");
+
+      const gross = sumOf(live, r => Number(r.order.totalAmount));
+      const returned = sumOf(live.filter(r => r.order.returnStatus === "RECEIVED"), r => Number(r.order.totalAmount));
+      const net = gross - returned;
+      const units = sumOf(live, r => sumOf(r.items, i => i.quantity));
+      const discounts = sumOf(live, r => Number(r.order.discountAmount || 0));
+
+      // by category and by product (amounts are before coupon discounts)
+      const byCat = {}, byProd = {};
+      live.forEach(r => r.items.forEach(i => {
+        const amount = Number(i.price) * i.quantity;
+        const c = byCat[i.category || "Uncategorised"] = byCat[i.category || "Uncategorised"] || { units: 0, revenue: 0 };
+        c.units += i.quantity; c.revenue += amount;
+        const pr = byProd[i.productId] = byProd[i.productId] || { name: i.productName, units: 0, revenue: 0 };
+        pr.units += i.quantity; pr.revenue += amount;
+      }));
+      const cats = Object.entries(byCat).sort((a, b) => b[1].revenue - a[1].revenue);
+      const prods = Object.values(byProd).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+      const catMax = Math.max(...cats.map(c => c[1].revenue), 1);
+      const prodMax = Math.max(...prods.map(x => x.revenue), 1);
+
+      // payments
+      const method = o => o.paymentMethod || "COD";
+      const cod = live.filter(r => method(r.order) !== "UPI"), upi = live.filter(r => method(r.order) === "UPI");
+      const collected = sumOf(live.filter(r => r.order.paymentStatus === "PAID"), r => Number(r.order.totalAmount));
+      const toCollect = sumOf(live.filter(r => !r.order.paymentStatus || r.order.paymentStatus === "PENDING"), r => Number(r.order.totalAmount));
+      const refundWaiting = sumOf(rows.filter(r => r.order.paymentStatus === "REFUND_PENDING"), r => Number(r.order.totalAmount));
+      const refunded = sumOf(rows.filter(r => r.order.paymentStatus === "REFUNDED"), r => Number(r.order.totalAmount));
+      const returnAsks = rows.filter(r => r.order.returnStatus);
+
+      const { points, monthly } = salesSeries(live);
+
+      p.innerHTML = `
+        <div class="page-head">
+          <h2>Sales Reports</h2>
+          <button class="btn" id="csvBtn">⬇ Download orders (CSV)</button>
+        </div>
+        ${rangeBarHtml()}
+
+        <div class="stat-grid">
+          ${statCard("💰", "Net sales", money(net), returned ? `Sales ${money(gross)} − returns ${money(returned)}` : "")}
+          ${statCard("🛍️", "Orders", live.length)}
+          ${statCard("🧾", "Average order", money(live.length ? gross / live.length : 0))}
+          ${statCard("👗", "Items sold", units)}
+          ${statCard("🏷️", "Discounts given", money(discounts), "coupons")}
+          ${statCard("❌", "Cancelled", cancelled.length, cancelled.length ? money(sumOf(cancelled, r => Number(r.order.totalAmount))) + " not sold" : "")}
+        </div>
+
+        <div class="panel">
+          <h3>Sales ${monthly ? "by month" : "by day"}</h3>
+          ${live.length ? barsHtml(points) : "<p class='msg'>No sales in this period.</p>"}
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Sales by category</h3>
+            ${cats.length ? `
+              <table class="orders-table compact"><thead><tr><th>Category</th><th>Units</th><th>Sales</th><th></th></tr></thead><tbody>
+                ${cats.map(([name, c]) => `<tr><td><span class="item-name">${esc(name)}</span></td><td>${c.units}</td><td class="num">${money(c.revenue)}</td><td>${shareBar(c.revenue / catMax * 100)}</td></tr>`).join("")}
+              </tbody></table>` : "<p class='msg'>Nothing sold in this period.</p>"}
+          </div>
+          <div class="panel">
+            <h3>Top selling dresses</h3>
+            ${prods.length ? `
+              <table class="orders-table compact"><thead><tr><th>Dress</th><th>Units</th><th>Sales</th><th></th></tr></thead><tbody>
+                ${prods.map(x => `<tr><td><span class="item-name">${esc(x.name)}</span></td><td>${x.units}</td><td class="num">${money(x.revenue)}</td><td>${shareBar(x.revenue / prodMax * 100)}</td></tr>`).join("")}
+              </tbody></table>` : "<p class='msg'>Nothing sold in this period.</p>"}
+          </div>
+        </div>
+        <p class="hint">Category and dress amounts are before coupon discounts, so they can add up to a little more than the net sales above.</p>
+
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Payments</h3>
+            <table class="orders-table compact"><tbody>
+              <tr><td>Cash on delivery</td><td>${cod.length} orders</td><td class="num">${money(sumOf(cod, r => Number(r.order.totalAmount)))}</td></tr>
+              <tr><td>UPI</td><td>${upi.length} orders</td><td class="num">${money(sumOf(upi, r => Number(r.order.totalAmount)))}</td></tr>
+              <tr><td><b>Money received</b></td><td>marked Paid</td><td class="num"><b>${money(collected)}</b></td></tr>
+              <tr><td><b>Still to collect</b></td><td>not marked Paid</td><td class="num"><b>${money(toCollect)}</b></td></tr>
+            </tbody></table>
+          </div>
+          <div class="panel">
+            <h3>Returns and refunds</h3>
+            <table class="orders-table compact"><tbody>
+              <tr><td>Return requests</td><td></td><td class="num">${returnAsks.length}</td></tr>
+              <tr><td>Returns received back</td><td></td><td class="num">${returnAsks.filter(r => r.order.returnStatus === "RECEIVED").length} · ${money(returned)}</td></tr>
+              <tr><td><b>Refunds to send</b></td><td>refund pending</td><td class="num"><b>${money(refundWaiting)}</b></td></tr>
+              <tr><td>Refunds sent</td><td></td><td class="num">${money(refunded)}</td></tr>
+            </tbody></table>
+          </div>
+        </div>`;
+
+      wireRangeBar(p, () => drawSalesReport(p));
+      $("csvBtn").onclick = () => exportOrdersCsv(rows);
+    }
+
+    // a file that opens in Excel / Google Sheets
+    function exportOrdersCsv(rows) {
+      if (!rows.length) { showError("There are no orders in this period to download."); return; }
+      // a cell that starts with = + - @ could run as a formula in Excel, so it gets a ' in front
+      const q = v => {
+        let t = String(v ?? "");
+        if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+        return `"${t.replace(/"/g, '""')}"`;
+      };
+      const head = ["Order", "Date", "Customer", "Phone", "Address", "Dresses", "Discount", "Coupon", "Total", "Payment method", "Payment status", "Order status"];
+      const lines = rows.map(r => {
+        const o = r.order;
+        return [
+          o.orderId, new Date(o.orderDate).toLocaleString("en-IN"), o.customerName, o.phoneNumber, o.address,
+          r.items.map(i => `${i.productName}${i.size ? " (" + i.size + ")" : ""} x${i.quantity}`).join("; "),
+          o.discountAmount || 0, o.couponCode || "", o.totalAmount, o.paymentMethod || "COD", o.paymentStatus || "PENDING", o.status
+        ].map(q).join(",");
+      });
+      const csv = "\uFEFF" + [head.map(q).join(","), ...lines].join("\r\n");
+
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      a.download = `zivelle-orders-${todayStr()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      toast("Downloaded " + rows.length + " orders");
+    }
+
+    // ---------- Delivery Stats ----------
+    function fmtDuration(ms) {
+      if (ms == null || isNaN(ms)) return "—";
+      if (ms < HOUR) return Math.max(1, Math.round(ms / 60000)) + " min";
+      if (ms < 2 * DAY) return (ms / HOUR).toFixed(1) + " hours";
+      return (ms / DAY).toFixed(1) + " days";
+    }
+    const avgOf = list => list.length ? list.reduce((s, x) => s + x, 0) / list.length : null;
+
+    async function renderDeliveryStats(p) {
+      p.innerHTML = `<h2>Delivery Stats</h2><p class="msg">Loading…</p>`;
+      try { await loadReportRows(); }
+      catch (e) { p.innerHTML = `<h2>Delivery Stats</h2><p class="msg">Could not load the report. ${esc(e.message)}</p>`; return; }
+      drawDeliveryStats(p);
+    }
+
+    function drawDeliveryStats(p) {
+      const rows = reportRows.filter(inRange);
+      const by = st => rows.filter(r => r.order.status === st);
+      const live = rows.filter(r => r.order.status !== "CANCELLED");
+      const delivered = by("DELIVERED");
+      const gap = (a, b) => +new Date(b) - +new Date(a);
+
+      // average times (only orders that have both times recorded)
+      const toDispatch = live.filter(r => r.order.shippedAt).map(r => gap(r.order.orderDate, r.order.shippedAt));
+      const inTransit = live.filter(r => r.order.shippedAt && r.order.deliveredAt).map(r => gap(r.order.shippedAt, r.order.deliveredAt));
+      const endToEnd = live.filter(r => r.order.deliveredAt).map(r => gap(r.order.orderDate, r.order.deliveredAt));
+
+      // the order funnel
+      const STAGES = ["PENDING", "CONFIRMED", "PREPARING", "SHIPPED", "DELIVERED", "CANCELLED"];
+      const counts = STAGES.map(st => [st, by(st).length]);
+      const maxCount = Math.max(...counts.map(c => c[1]), 1);
+
+      // orders that are waiting too long (looks at ALL orders, not only the chosen period)
+      const now = Date.now();
+      const late = reportRows.map(r => r.order).map(o => {
+        const started = o.status === "SHIPPED" ? +new Date(o.shippedAt || o.orderDate) : +new Date(o.orderDate);
+        const age = now - started;
+        let limit = null, why = "";
+        if (o.status === "PENDING") { limit = DAY; why = "Not confirmed for over 1 day"; }
+        else if (o.status === "CONFIRMED" || o.status === "PREPARING") { limit = 2 * DAY; why = "Not dispatched for over 2 days"; }
+        else if (o.status === "SHIPPED") { limit = 7 * DAY; why = "On the way for over 7 days"; }
+        return limit && age > limit ? { o, age, why } : null;
+      }).filter(Boolean).sort((a, b) => b.age - a.age);
+
+      // why orders are cancelled / returned
+      const topReasons = (list, key) => {
+        const m = {};
+        list.forEach(r => { const t = String(r.order[key] || "Not specified").trim().toLowerCase(); m[t] = (m[t] || 0) + 1; });
+        return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      };
+      const cancelReasons = topReasons(by("CANCELLED"), "cancelReason");
+      const returnReasons = topReasons(rows.filter(r => r.order.returnStatus), "returnReason");
+      const reasonTable = list => list.length
+        ? `<table class="orders-table compact"><tbody>${list.map(([t, n]) => `<tr><td>${esc(t.charAt(0).toUpperCase() + t.slice(1))}</td><td class="num">${n}</td></tr>`).join("")}</tbody></table>`
+        : "<p class='msg'>None in this period.</p>";
+
+      const timeRow = (label, list) => `<tr><td>${label}</td><td class="num"><b>${fmtDuration(avgOf(list))}</b></td><td>${list.length ? "from " + list.length + " orders" : "no data yet"}</td></tr>`;
+
+      p.innerHTML = `
+        <h2>Delivery Stats</h2>
+        ${rangeBarHtml()}
+
+        <div class="stat-grid">
+          ${statCard("✅", "Delivered", delivered.length, pctOf(delivered.length, live.length) + " of orders")}
+          ${statCard("🚚", "On the way", by("SHIPPED").length)}
+          ${statCard("📦", "Being packed", by("CONFIRMED").length + by("PREPARING").length)}
+          ${statCard("⏳", "Not confirmed yet", by("PENDING").length)}
+          ${statCard("❌", "Cancellation rate", pctOf(by("CANCELLED").length, rows.length), by("CANCELLED").length + " orders")}
+          ${statCard("↩️", "Return rate", pctOf(rows.filter(r => r.order.returnStatus).length, delivered.length), "of delivered orders")}
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Average time</h3>
+            <table class="orders-table compact"><tbody>
+              ${timeRow("Order placed to dispatched", toDispatch)}
+              ${timeRow("Dispatched to delivered", inTransit)}
+              ${timeRow("Order placed to delivered", endToEnd)}
+            </tbody></table>
+            ${toDispatch.length || endToEnd.length ? "" : "<p class='hint'>The dispatch time is recorded from now on, so older orders do not have it. Deliver a few new orders and these numbers will fill in.</p>"}
+          </div>
+          <div class="panel">
+            <h3>Where the orders are</h3>
+            <table class="orders-table compact"><tbody>
+              ${counts.map(([st, n]) => `<tr><td>${st.charAt(0) + st.slice(1).toLowerCase()}</td><td class="num">${n}</td><td>${shareBar(n / maxCount * 100)}</td></tr>`).join("")}
+            </tbody></table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="page-head" style="margin-bottom:.6rem">
+            <h3 style="margin:0">Orders waiting too long <span class="count">${late.length}</span></h3>
+            ${late.length ? `<button class="btn" id="goPacking">Open Packing &amp; Dispatch</button>` : ""}
+          </div>
+          ${late.length ? `
+            <table class="orders-table compact"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Waiting</th><th>Why</th></tr></thead><tbody>
+              ${late.map(x => `<tr><td><b>#${x.o.orderId}</b></td><td>${esc(x.o.customerName)}</td><td><span class="pill">${x.o.status}</span></td><td>${fmtDuration(x.age)}</td><td>${x.why}</td></tr>`).join("")}
+            </tbody></table>` : "<p class='msg'>Nothing is late. Every order is moving on time. 🎉</p>"}
+        </div>
+
+        <div class="grid-2">
+          <div class="panel"><h3>Top cancel reasons</h3>${reasonTable(cancelReasons)}</div>
+          <div class="panel"><h3>Top return reasons</h3>${reasonTable(returnReasons)}</div>
+        </div>`;
+
+      wireRangeBar(p, () => drawDeliveryStats(p));
+      const g = $("goPacking");
+      if (g) g.onclick = () => go("packing");
+    }
+
+    // ---------- Marketing Analytics ----------
+    async function renderMarketing(p) {
+      p.innerHTML = `<h2>Marketing Analytics</h2><p class="msg">Loading…</p>`;
+      let content = {}, customers = [];
+      try {
+        content = await fetch(`${API}/content`).then(r => r.json());
+        const cr = await fetch(`${API}/customer/admin/all`);
+        customers = cr.ok ? await cr.json() : [];
+        await loadReportRows();
+      } catch (e) {
+        p.innerHTML = `<h2>Marketing Analytics</h2><p class="msg">Could not load the data. ${esc(e.message)}</p>`;
+        return;
+      }
+
+      const ga = content.ga_measurement_id || "", px = content.meta_pixel_id || "";
+
+      // customers and coupons, from the shop's own orders (all time)
+      const live = reportRows.filter(r => r.order.status !== "CANCELLED");
+      const buyers = {};
+      live.forEach(r => {
+        const id = r.order.customer ? r.order.customer.customerId : r.order.customerName;
+        const b = buyers[id] = buyers[id] || { name: r.order.customerName, orders: 0, spent: 0 };
+        b.orders++; b.spent += Number(r.order.totalAmount);
+      });
+      const buyerList = Object.values(buyers);
+      const repeat = buyerList.filter(b => b.orders >= 2).length;
+      const newCustomers = customers.filter(c => c.createdAt && +new Date(c.createdAt) >= Date.now() - 30 * DAY).length;
+      const topBuyers = [...buyerList].sort((a, b) => b.spent - a.spent).slice(0, 5);
+
+      const byCoupon = {};
+      live.filter(r => r.order.couponCode).forEach(r => {
+        const c = byCoupon[r.order.couponCode] = byCoupon[r.order.couponCode] || { orders: 0, discount: 0, sales: 0 };
+        c.orders++; c.discount += Number(r.order.discountAmount || 0); c.sales += Number(r.order.totalAmount);
+      });
+      const coupons = Object.entries(byCoupon).sort((a, b) => b[1].orders - a[1].orders);
+
+      const state = id => id ? `<span class="pill pill-paid">Connected</span>` : `<span class="pill">Not set</span>`;
+
+      p.innerHTML = `
+        <h2>Marketing Analytics</h2>
+
+        <div class="panel">
+          <h3>Website tracking</h3>
+          <p class="msg">Paste your IDs and every page of the shop starts sending visits and sales to Google and Meta (Facebook and Instagram). Leave a box empty to switch that tracker off.</p>
+          <form id="trForm" class="form grid">
+            <label class="field">Google Analytics ID ${state(ga)}
+              <input id="trGa" placeholder="G-XXXXXXXXXX" value="${esc(ga)}">
+              <span class="hint">Google Analytics, Admin, Data streams, Web: the Measurement ID</span>
+            </label>
+            <label class="field">Meta Pixel ID ${state(px)}
+              <input id="trPx" placeholder="1234567890123456" value="${esc(px)}">
+              <span class="hint">Meta Events Manager, Data sources, your Pixel: the Pixel ID</span>
+            </label>
+            <button>Save tracking</button>
+          </form>
+          <p class="msg"><b>What is sent:</b> every page visit, a dress being viewed, a dress added to the bag, and a placed order with its amount.</p>
+          <details class="how">
+            <summary>How to check that it works, and more links</summary>
+            <ul class="plain-list">
+              <li>Save the IDs, then open your shop in another tab and click around.</li>
+              <li>Google: Analytics, Reports, <b>Realtime</b>. Your visit should appear within a minute.</li>
+              <li>Meta: Events Manager, your Pixel, <b>Test events</b>.</li>
+              <li><b>Google Search and YouTube:</b> inside Google Analytics, open Admin, Product links, and link Search Console and your YouTube channel. No code is needed for that.</li>
+              <li>Ad blockers hide some visitors, so the numbers can be a little lower than the real visits.</li>
+              <li>Before you go online, add a privacy policy page. Ask visitors for cookie permission if the law in your area needs it.</li>
+            </ul>
+          </details>
+        </div>
+
+        <div class="stat-grid">
+          ${statCard("🧑‍🤝‍🧑", "Customers", customers.length)}
+          ${statCard("🆕", "New in 30 days", newCustomers)}
+          ${statCard("🔁", "Repeat customers", repeat, pctOf(repeat, buyerList.length) + " of buyers")}
+          ${statCard("🏷️", "Coupons used", sumOf(coupons, c => c[1].orders), "orders")}
+        </div>
+
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Coupon performance</h3>
+            ${coupons.length ? `
+              <table class="orders-table compact"><thead><tr><th>Code</th><th>Orders</th><th>Discount given</th><th>Sales</th></tr></thead><tbody>
+                ${coupons.map(([code, c]) => `<tr><td><span class="item-name">${esc(code)}</span></td><td>${c.orders}</td><td class="num">${money(c.discount)}</td><td class="num">${money(c.sales)}</td></tr>`).join("")}
+              </tbody></table>` : "<p class='msg'>No coupon has been used yet.</p>"}
+          </div>
+          <div class="panel">
+            <h3>Top customers</h3>
+            ${topBuyers.length ? `
+              <table class="orders-table compact"><thead><tr><th>Customer</th><th>Orders</th><th>Spent</th></tr></thead><tbody>
+                ${topBuyers.map(b => `<tr><td>${esc(b.name)}</td><td>${b.orders}</td><td class="num">${money(b.spent)}</td></tr>`).join("")}
+              </tbody></table>` : "<p class='msg'>No orders yet.</p>"}
+          </div>
+        </div>
+        <p class="hint">The customer and coupon numbers are from your own orders (all time, cancelled orders left out).</p>`;
+
+      $("trForm").onsubmit = async e => {
+        e.preventDefault();
+        const gaVal = $("trGa").value.trim().toUpperCase();
+        const pxVal = $("trPx").value.trim();
+        if (gaVal && !/^G-[A-Z0-9]{6,14}$/.test(gaVal)) { showError("A Google Analytics ID looks like G-XXXXXXXXXX"); return; }
+        if (pxVal && !/^\d{8,20}$/.test(pxVal)) { showError("A Meta Pixel ID is a number with 8 to 20 digits"); return; }
+
+        const r = await fetch(`${API}/content/admin/save`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ga_measurement_id: gaVal, meta_pixel_id: pxVal })
+        });
+        if (!r.ok) { showError(await errText(r)); return; }
+        toast("Tracking saved. The shop pages use it from the next page load.");
+        renderMarketing(p);
+      };
+    }
+
+    async function catAction(d) {
+      if (d.act === "sub") {
+        const n = await askText("New subcategory", `Under "${d.name}"`, { required: true });
+        if (!n) return;
+        await catCall(`${API}/categories/admin/add?name=${encodeURIComponent(n)}&parentId=${d.id}`, "POST");
+      } else if (d.act === "rename") {
+        const n = await askText("Rename", `New name for "${d.name}"`, { value: d.name, required: true });
+        if (!n || n === d.name) return;
+        await catCall(`${API}/categories/admin/rename/${d.id}?name=${encodeURIComponent(n)}`, "PUT");
+      } else if (d.act === "delete") {
+        if (!(await askConfirm("Delete", `Delete "${d.name}"?`, { okText: "Delete", danger: true }))) return;
+        await catCall(`${API}/categories/admin/delete/${d.id}`, "DELETE");
+      }
+      tab("categories");
+    }
+
+    // the backend sends a readable reason when something is not allowed
+    async function catCall(url, method) {
+      const r = await fetch(url, { method });
+      if (!r.ok) showError(await errText(r));
+    }
+
+    const del = async id => {
+      const prod = productCache.find(x => x.productId === id);
+      const ok = await askConfirm("Delete product", `Delete "${prod ? prod.productName : "this product"}"?`, { okText: "Delete", danger: true });
+      if (!ok) return;
+      const r = await fetch(`${API}/products/admin/delete/${id}`, { method: "DELETE" });
+      if (!r.ok) { showError(await errText(r)); return; }
+      toast("Product deleted");
+      tab("products");
+    };
+
+    // Changing status to PREPARING (order processing begins) auto-opens the bill once.
+    // The 🧾 Bill button next to the status then stays visible for PREPARING/SHIPPED/DELIVERED,
+    // so the admin can reopen it any time without needing to change the status again.
+    const setStatus = async (id, status) => {
+      await changeStatus(id, status, "");
+      tab("orders");
+    };
+    const togglePaid = async (id, cur) => {
+      await fetch(`${API}/orders/admin/payment/${id}?status=${cur === "PAID" ? "PENDING" : "PAID"}`, { method: "PUT" });
+      tab("orders");
+    };
+
+    show();
+  </script>
+</body>
+</html>

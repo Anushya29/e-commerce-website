@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — About</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="page">
+      <main class="wide">
+        <h2 id="aboutTitle"></h2>
+        <div class="about-text" id="aboutText"></div>
+
+        <div class="panel">
+          <h3>Contact us</h3>
+          <div id="contactInfo"></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    renderSidebar("about");
+
+    (async () => {
+      const c = await getSiteContent();
+
+      document.getElementById("aboutTitle").textContent = c.about_title;
+
+      // an empty line starts a new paragraph
+      document.getElementById("aboutText").innerHTML = c.about_text
+        .split(/\n\s*\n/)
+        .map(par => `<p>${escHtml(par.trim()).replace(/\n/g, "<br>")}</p>`)
+        .join("");
+
+      const lines = [];
+      if (c.contact_email) lines.push(`✉️ <a href="mailto:${escHtml(c.contact_email)}">${escHtml(c.contact_email)}</a>`);
+      if (c.contact_phone) lines.push(`📞 <a href="tel:${escHtml(c.contact_phone)}">${escHtml(c.contact_phone)}</a>`);
+      if (c.contact_address) lines.push(`📍 ${escHtml(c.contact_address)}`);
+      document.getElementById("contactInfo").innerHTML =
+        lines.length ? lines.map(l => `<p class="contact-line">${l}</p>`).join("") : "<p class='msg'>No contact details yet.</p>";
+    })();
+  </script>
+</body>
+</html>

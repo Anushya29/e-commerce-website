@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Dress Boutique</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <div class="page">
+      <!-- banners: only shown when the admin has added some -->
+      <section class="banner-slider" id="bannerSlider" hidden>
+        <div id="bannerTrack"></div>
+        <button class="banner-nav prev" id="bannerPrev" aria-label="Previous banner">‹</button>
+        <button class="banner-nav next" id="bannerNext" aria-label="Next banner">›</button>
+        <div class="banner-dots" id="bannerDots"></div>
+      </section>
+
+      <section class="hero">
+        <span class="hero-badge" id="heroBadge"></span>
+        <h1 id="heroTitle"></h1>
+        <p id="heroSub"></p>
+      </section>
+
+      <main>
+        <input id="search" class="search" placeholder="Search dresses, colors, categories…">
+
+        <div class="filter-row" id="filterRow">
+          <button class="filter-pill active" data-category="all">All</button>
+        </div>
+        <div class="filter-row" id="subFilterRow"></div>
+
+        <p id="statusMsg" class="status-msg">Loading collection…</p>
+        <section id="productGrid" class="product-grid"></section>
+      </main>
+
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    renderSidebar("index");
+    const $ = id => document.getElementById(id);
+
+    // ---------- website text (from Admin, Content Management) ----------
+    (async () => {
+      const c = await getSiteContent();
+
+      $("heroTitle").innerHTML = c.hero_title.split("\n").map(escHtml).join("<br>");
+      $("heroSub").textContent = c.hero_subtitle;
+
+      // rotating lines above the heading
+      let phrases = c.hero_phrases.split("\n").map(s => s.trim()).filter(Boolean);
+      if (!phrases.length) phrases = SITE_DEFAULTS.hero_phrases.split("\n");
+      let heroIndex = 0;
+      const heroBadge = $("heroBadge");
+      heroBadge.style.transition = "opacity .2s";
+      const showNextPhrase = () => {
+        heroBadge.style.opacity = 0;
+        setTimeout(() => {
+          heroBadge.textContent = phrases[heroIndex % phrases.length];
+          heroBadge.style.opacity = 1;
+          heroIndex++;
+        }, 200);
+      };
+      showNextPhrase();
+      if (phrases.length > 1) setInterval(showNextPhrase, 2800);
+    })();
+
+    // ---------- banners (from Admin, Content Management) ----------
+    // a link is only used if it is one of our pages or an http(s) address
+    const safeLink = u => (u && (/^https?:\/\//i.test(u) || !u.includes(":"))) ? u : "";
+
+    (async () => {
+      try {
+        const list = await (await fetch(`${API}/banners`)).json();
+        if (!list.length) return;                       // no banners: the slider stays hidden
+
+        $("bannerTrack").innerHTML = list.map((b, i) => {
+          const caption = (b.title || b.subtitle)
+            ? `<div class="banner-caption">${b.title ? `<h2>${escHtml(b.title)}</h2>` : ""}${b.subtitle ? `<p>${escHtml(b.subtitle)}</p>` : ""}</div>` : "";
+          const inner = `<img src="${escHtml(b.imageUrl)}" alt="${escHtml(b.title || "Banner")}">${caption}`;
+          const link = safeLink(b.linkUrl);
+          return link
+            ? `<a class="banner-slide" href="${escHtml(link)}">${inner}</a>`
+            : `<div class="banner-slide">${inner}</div>`;
+        }).join("");
+
+        const slides = [...document.querySelectorAll(".banner-slide")];
+        $("bannerDots").innerHTML = slides.map((_, i) => `<button data-i="${i}" aria-label="Banner ${i + 1}"></button>`).join("");
+        const dots = [...document.querySelectorAll("#bannerDots button")];
+
+        let current = 0, timer;
+        const show = i => {
+          current = (i + slides.length) % slides.length;
+          slides.forEach((s, k) => s.classList.toggle("active", k === current));
+          dots.forEach((d, k) => d.classList.toggle("active", k === current));
+        };
+        const restart = () => { clearInterval(timer); if (slides.length > 1) timer = setInterval(() => show(current + 1), 4500); };
+
+        $("bannerPrev").onclick = () => { show(current - 1); restart(); };
+        $("bannerNext").onclick = () => { show(current + 1); restart(); };
+        dots.forEach(d => d.onclick = () => { show(+d.dataset.i); restart(); });
+        if (slides.length < 2) { $("bannerPrev").hidden = $("bannerNext").hidden = $("bannerDots").hidden = true; }
+
+        $("bannerSlider").hidden = false;
+        show(0);
+        restart();
+      } catch (e) { /* backend not reachable: the page still works without banners */ }
+    })();
+  </script>
+  <script src="script.js"></script>
+</body>
+</html>

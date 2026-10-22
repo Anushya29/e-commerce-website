@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Dress</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="page">
+      <main class="wide">
+        <p><a href="index.html" class="back">← Back to collection</a></p>
+        <div id="detail" class="detail"><p class="msg">Loading…</p></div>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    renderSidebar(null);
+    const id = new URLSearchParams(location.search).get("id");
+    const opts = s => (s || "").split(",").map(x => x.trim()).filter(Boolean);
+
+    (async () => {
+      const box = document.getElementById("detail");
+      try {
+        const p = await (await fetch(`${API}/products/${id}`)).json();
+        const sizes = opts(p.size), colors = opts(p.color);
+        const unitPrice = p.effectivePrice ?? p.price;
+        const trackItem = qty => ({ item_id: p.productId, item_name: p.productName, price: unitPrice, quantity: qty });
+        track("view_item", { value: unitPrice, items: [trackItem(1)] });
+        const select = (name, list) => list.length
+          ? `<label>${name}<select id="${name}">${list.map(x => `<option>${x}</option>`).join("")}</select></label>` : "";
+
+        box.innerHTML = `
+          <img src="${p.imageUrl || 'https://placehold.co/300x400?text=Zivelle'}" alt="${p.productName}">
+          <div class="info">
+            <span class="category-tag">${(p.category || "").toUpperCase()}</span>
+            <h2>${p.productName}</h2>
+            <p class="price">${p.offerActive ? `<span class="old-price">₹${p.price}</span>₹${p.effectivePrice} <span class="offer-note">${p.discountPercent}% off · ends ${p.offerEndDate.split("-").reverse().join("/")}</span>` : `₹${p.price}`}</p>
+            <p class="msg">${p.description || ""}</p>
+            <div class="form">
+              ${select("Size", sizes)}
+              ${select("Color", colors)}
+              <label>Quantity<input id="qty" type="number" min="1" value="1"></label>
+              <button id="add" class="buy" ${p.stock === 0 ? "disabled" : ""}>${p.stock === 0 ? "Out of stock" : "Add to bag"}</button>
+              <p class="msg" id="note">${p.stock > 0 && p.stock <= 5 ? "Only " + p.stock + " left" : ""}</p>
+            </div>
+          </div>`;
+
+        document.getElementById("add").onclick = async () => {
+          const qty = +document.getElementById("qty").value;
+          const size = sizes.length ? document.getElementById("Size").value : null;
+          const color = colors.length ? document.getElementById("Color").value : null;
+          const customer = getCustomer();
+
+          if (customer) {
+            const params = new URLSearchParams({ customerId: customer.customerId, productId: p.productId, quantity: qty });
+            if (size) params.set("size", size);
+            if (color) params.set("color", color);
+            const r = await fetch(`${API}/cart/add?` + params, { method: "POST" });
+            if (r.ok) { toast(`${p.productName} added to bag`); track("add_to_cart", { value: unitPrice * qty, items: [trackItem(qty)] }); }
+            else document.getElementById("note").textContent = "Could not add. Try again.";
+          } else {
+            addGuestItem({ productId: p.productId, productName: p.productName, price: p.effectivePrice ?? p.price, imageUrl: p.imageUrl, quantity: qty, size, color });
+            toast(`${p.productName} added to bag`);
+            track("add_to_cart", { value: unitPrice * qty, items: [trackItem(qty)] });
+          }
+          updateBagBadge();
+        };
+      } catch (e) {
+        box.innerHTML = "<p class='msg'>Could not load this dress.</p>";
+      }
+    })();
+  </script>
+</body>
+</html>

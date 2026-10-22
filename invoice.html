@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Invoice</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .inv-wrap { max-width: 720px; margin: 2rem auto; padding: 2rem; background: #fff; border: 1px solid var(--border); border-radius: 10px; }
+    .inv-head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid var(--plum); padding-bottom: 1rem; margin-bottom: 1.2rem; }
+    .inv-head .brand { font-family: 'Cormorant Garamond', serif; font-size: 1.8rem; color: var(--plum); font-weight: 600; }
+    .inv-head .meta { text-align: right; font-size: 0.85rem; color: var(--muted); }
+    .inv-parties { display: flex; justify-content: space-between; gap: 2rem; margin-bottom: 1.5rem; }
+    .inv-parties > div { flex: 1; }
+    .inv-parties h4 { margin: 0 0 0.3rem; color: var(--gold); font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .inv-parties p { margin: 0; font-size: 0.9rem; line-height: 1.5; }
+    table.inv-table { width: 100%; border-collapse: collapse; margin-bottom: 0.6rem; }
+    table.inv-table th { text-align: left; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--border); padding: 0.5rem 0.4rem; }
+    table.inv-table td { padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--border); font-size: 0.92rem; }
+    table.inv-table td.num { text-align: right; white-space: nowrap; }
+    .inv-total-row td { font-weight: 600; font-size: 1.05rem; border-top: 2px solid var(--plum); border-bottom: none; }
+    .inv-foot { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--muted); margin-top: 1.5rem; }
+    .inv-actions { max-width: 720px; margin: 0 auto 0; display: flex; gap: 0.7rem; justify-content: flex-end; }
+    .ed-field, .ed-cell { border: 1px solid var(--border); border-radius: 4px; padding: 0.35rem 0.5rem; font: inherit; width: 100%; margin-bottom: 0.35rem; box-sizing: border-box; }
+    .ed-cell.qty, .ed-cell.price { width: 70px; }
+    .ed-cell.small { width: 90px; }
+    @media print {
+      .sidebar, .inv-actions, .no-print { display: none !important; }
+      .app { display: block !important; }
+      .inv-wrap { border: none; margin: 0; max-width: 100%; }
+      .ed-field, .ed-cell { border: none; padding: 0; background: transparent; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar" hidden></aside>
+    <div class="page">
+      <div class="inv-actions">
+        <button class="ghost" onclick="history.back()">← Back</button>
+        <button class="ghost" id="editBtn" onclick="toggleEdit()">✏️ Edit</button>
+        <button onclick="window.print()">🖨 Print / Save as PDF</button>
+      </div>
+      <div class="inv-wrap" id="inv">
+        <p class="msg">Loading invoice…</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    const orderId = new URLSearchParams(location.search).get("id");
+
+    const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    let order = null;
+    let shopName = "Zivelle Boutique";
+    let shopAddress = "Chennai, Tamil Nadu";
+    let shopEmail = "zivelle@shop.com";
+    let toName = "", toPhone = "", toAddress = "";
+    let lineItems = [];
+    let editing = false;
+
+    (async () => {
+      try {
+        const [ord, items] = await Promise.all([
+          fetch(`${API}/orders/${orderId}`).then(r => r.json()),
+          fetch(`${API}/orders/${orderId}/items`).then(r => r.json())
+        ]);
+        order = ord;
+        // the shop details printed under "From" come from Admin, Content Management
+        const site = await getSiteContent();
+        shopName = site.shop_name;
+        shopAddress = site.contact_address;
+        shopEmail = site.contact_email;
+        toName = order.customerName; toPhone = order.phoneNumber; toAddress = order.address;
+        lineItems = items.map(i => ({
+          name: i.product.productName, color: i.color || "", size: i.size || "",
+          qty: i.quantity, price: i.price
+        }));
+        render();
+      } catch (e) {
+        document.getElementById("inv").innerHTML = "<p class='msg'>Could not load this invoice.</p>";
+      }
+    })();
+
+    // rupees taken off by a coupon (0 if none)
+    const discount = () => Number(order && order.discountAmount) || 0;
+
+    function total() {
+      return lineItems.reduce((s, i) => s + i.qty * i.price, 0) - discount();
+    }
+
+    function render() {
+      document.getElementById("inv").innerHTML = `
+        <div class="inv-head">
+          <div>
+            <div class="brand">🦋 Zivelle</div>
+            <p class="msg">Dress Boutique</p>
+          </div>
+          <div class="meta">
+            <div><b>Invoice #${order.orderId}</b></div>
+            <div>${new Date(order.orderDate).toLocaleDateString()}</div>
+            <div>Status: ${order.status}</div>
+          </div>
+        </div>
+
+        <div class="inv-parties">
+          <div>
+            <h4>From</h4>
+            ${editing
+              ? `<input class="ed-field" value="${esc(shopName)}" oninput="shopName=this.value">
+                 <input class="ed-field" value="${esc(shopAddress)}" oninput="shopAddress=this.value">
+                 <input class="ed-field" value="${esc(shopEmail)}" oninput="shopEmail=this.value">`
+              : `<p><b>${esc(shopName)}</b><br>${esc(shopAddress)}<br>${esc(shopEmail)}</p>`}
+          </div>
+          <div>
+            <h4>To</h4>
+            ${editing
+              ? `<input class="ed-field" value="${esc(toName)}" oninput="toName=this.value">
+                 <input class="ed-field" value="${esc(toPhone)}" oninput="toPhone=this.value">
+                 <input class="ed-field" value="${esc(toAddress)}" oninput="toAddress=this.value">`
+              : `<p><b>${esc(toName)}</b><br>${esc(toPhone)}<br>${esc(toAddress)}</p>`}
+          </div>
+        </div>
+
+        <table class="inv-table">
+          <thead>
+            <tr><th>Item</th><th>Size</th><th>Qty</th><th class="num">Price</th><th class="num">Subtotal</th>${editing ? "<th class='no-print'></th>" : ""}</tr>
+          </thead>
+          <tbody>
+            ${lineItems.map((it, idx) => editing ? `
+              <tr>
+                <td><input class="ed-cell" value="${esc(it.name)}" oninput="updateItem(${idx}, 'name', this.value)"></td>
+                <td><input class="ed-cell small" value="${esc(it.size)}" oninput="updateItem(${idx}, 'size', this.value)"></td>
+                <td><input class="ed-cell qty" type="number" min="1" value="${it.qty}" oninput="updateItem(${idx}, 'qty', this.value)"></td>
+                <td><input class="ed-cell price" type="number" step="0.01" value="${it.price}" oninput="updateItem(${idx}, 'price', this.value)"></td>
+                <td class="num" id="sub${idx}">₹${(it.qty * it.price).toFixed(2)}</td>
+                <td class="no-print"><button class="ghost" onclick="removeItem(${idx})">✕</button></td>
+              </tr>` : `
+              <tr>
+                <td>${esc(it.name)}${it.color ? " · " + esc(it.color) : ""}</td>
+                <td>${esc(it.size) || "—"}</td>
+                <td>${it.qty}</td>
+                <td class="num">₹${it.price}</td>
+                <td class="num">₹${(it.qty * it.price).toFixed(2)}</td>
+              </tr>`).join("")}
+            ${discount() > 0 ? `
+            <tr>
+              <td colspan="${editing ? 5 : 4}" style="text-align:right">Discount${order.couponCode ? " (" + esc(order.couponCode) + ")" : ""}</td>
+              <td class="num">− ₹${discount().toFixed(2)}</td>
+            </tr>` : ""}
+            <tr class="inv-total-row">
+              <td colspan="${editing ? 5 : 4}">Total</td>
+              <td class="num" id="totalCell">₹${total().toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+        ${editing ? `<button class="ghost no-print" onclick="addItem()">+ Add item</button>` : ""}
+
+        <div class="inv-foot">
+          <span>Payment: ${order.paymentMethod || "COD"} (${order.paymentStatus === "PAID" ? "Paid" : "Pending"})</span>
+          <span>Thank you for shopping with Zivelle 🦋</span>
+        </div>`;
+    }
+
+    // Live-update one row's subtotal and the grand total, WITHOUT a full re-render
+    // (a full re-render would make the input lose focus while typing).
+    function updateItem(idx, field, val) {
+      lineItems[idx][field] = (field === "qty" || field === "price") ? (+val || 0) : val;
+      const sub = document.getElementById("sub" + idx);
+      if (sub) sub.textContent = "₹" + (lineItems[idx].qty * lineItems[idx].price).toFixed(2);
+      document.getElementById("totalCell").textContent = "₹" + total().toFixed(2);
+    }
+
+    function addItem() {
+      lineItems.push({ name: "New item", size: "", color: "", qty: 1, price: 0 });
+      render();
+    }
+
+    function removeItem(idx) {
+      lineItems.splice(idx, 1);
+      render();
+    }
+
+    function toggleEdit() {
+      editing = !editing;
+      document.getElementById("editBtn").textContent = editing ? "✅ Done editing" : "✏️ Edit";
+      render();
+    }
+  </script>
+</body>
+</html>

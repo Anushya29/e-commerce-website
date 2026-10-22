@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Login</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="page">
+      <main class="narrow">
+        <h2 id="title">Welcome back</h2>
+
+        <form id="loginForm" class="form">
+          <input id="lu" placeholder="Username" required>
+          <input id="lp" type="password" placeholder="Password" required>
+          <button>Login</button>
+        </form>
+
+        <form id="regForm" class="form" hidden>
+          <input id="rn" placeholder="Full name" required>
+          <input id="ru" placeholder="Username" required>
+          <input id="rp" type="password" placeholder="Password" required>
+          <input id="rph" placeholder="Phone number" required>
+          <input id="ra" placeholder="Address" required>
+          <button>Create account</button>
+        </form>
+
+        <p class="msg" id="msg"></p>
+        <p class="switch"><a href="#" id="toggle">New here? Create an account</a> · <a href="admin.html">Admin login</a></p>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    renderSidebar("login");
+    const $ = id => document.getElementById(id);
+
+    if (localStorage.getItem("zRedirect")) {
+      $("msg").textContent = "Login or create an account to continue to checkout.";
+    }
+
+    $("toggle").onclick = e => {
+      e.preventDefault();
+      const showReg = $("regForm").hidden;
+      $("regForm").hidden = !showReg;
+      $("loginForm").hidden = showReg;
+      $("title").textContent = showReg ? "Create your account" : "Welcome back";
+      e.target.textContent = showReg ? "Have an account? Login" : "New here? Create an account";
+    };
+
+    $("loginForm").onsubmit = async e => {
+      e.preventDefault();
+      const params = new URLSearchParams({ username: $("lu").value, password: $("lp").value });
+      const r = await fetch(`${API}/customer/login?` + params, { method: "POST" });
+      const text = await r.text();
+      let c = null;
+      try { c = JSON.parse(text); } catch {}
+      if (c && c.customerId) {
+        await finishLogin(c);
+      } else {
+        $("msg").textContent = "Invalid username or password";
+      }
+    };
+
+    $("regForm").onsubmit = async e => {
+      e.preventDefault();
+      const r = await fetch(`${API}/customer/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: $("rn").value, username: $("ru").value, password: $("rp").value,
+          phoneNumber: $("rph").value, address: $("ra").value
+        })
+      });
+      if (r.ok) {
+        await finishLogin(await r.json());
+      } else {
+        $("msg").textContent = "Could not register. That username may already be taken.";
+      }
+    };
+  </script>
+</body>
+</html>

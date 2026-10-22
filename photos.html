@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Dress photos</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="admin.html">🦋 Zivelle Admin</a>
+      <nav class="side-nav">
+        <a href="admin.html">← Back to Admin</a>
+        <a href="photos.html" class="active">📷 Photos</a>
+      </nav>
+    </aside>
+
+    <div class="page">
+      <main class="wide">
+        <h2>Dress photos</h2>
+        <p class="msg">No photo yet: click "Choose file". Photo already added: click "Delete" to remove it, then choose a new one.</p>
+        <div id="list"></div>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    if (!sessionStorage.getItem("zAdmin")) location.href = "admin.html";   // admin must be logged in
+
+    let products = [];
+    // A product counts as "has a photo" only if it has a real uploaded image (not the grey placeholder)
+    const hasPhoto = p => p.imageUrl && !p.imageUrl.includes("placehold.co");
+
+    function rowHtml(p) {
+      return `
+        <div class="row" id="row${p.productId}">
+          <img class="thumb" src="${hasPhoto(p) ? p.imageUrl : "https://placehold.co/48x64?text=+"}">
+          <span class="grow"><span class="item-name">${p.productName}</span><small id="s${p.productId}">${p.category || ""}</small></span>
+          ${hasPhoto(p)
+            ? `<button class="ghost danger" onclick="removePhoto(${p.productId})">🗑 Delete</button>`
+            : `<label class="upload-btn">Choose file<input type="file" accept="image/*" hidden onchange="upload(${p.productId}, this)"></label>`}
+        </div>`;
+    }
+
+    function refreshRow(p) {
+      products = products.map(x => x.productId === p.productId ? p : x);
+      document.getElementById("row" + p.productId).outerHTML = rowHtml(p);
+    }
+
+    (async () => {
+      products = await (await fetch(`${API}/products`)).json();
+      document.getElementById("list").innerHTML = products.map(rowHtml).join("");
+    })();
+
+    async function upload(id, input) {
+      const file = input.files[0];
+      if (!file) return;
+      document.getElementById("s" + id).textContent = "Uploading…";
+
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`${API}/products/admin/image/${id}`, { method: "POST", body: fd });
+
+      if (r.ok) {
+        refreshRow(await r.json());
+        toast("Photo saved ✓");
+      } else {
+        document.getElementById("s" + id).textContent = "Upload failed (use jpg, png or webp, under 10 MB)";
+      }
+    }
+
+    async function removePhoto(id) {
+      if (!(await askConfirm("Delete photo", "Delete this photo?", { okText: "Delete", danger: true }))) return;
+      const r = await fetch(`${API}/products/admin/image/${id}`, { method: "DELETE" });
+      if (r.ok) {
+        refreshRow(await r.json());
+        toast("Photo deleted");
+      } else {
+        document.getElementById("s" + id).textContent = "Could not delete. Check the backend console.";
+      }
+    }
+  </script>
+</body>
+</html>

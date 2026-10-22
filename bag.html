@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zivelle — Bag</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="page">
+      <main class="narrow">
+        <h2>Your Bag</h2>
+        <div id="items"></div>
+
+        <div id="couponBox" class="coupon-box" hidden>
+          <input id="couponCode" placeholder="Have a coupon code?" autocomplete="off">
+          <button type="button" class="ghost" id="couponApply">Apply</button>
+          <button type="button" class="ghost" id="couponRemove" hidden>Remove</button>
+        </div>
+        <p class="msg" id="couponMsg"></p>
+
+        <p class="total" id="total"></p>
+
+        <form id="checkout" class="form" hidden>
+          <h3>Delivery details</h3>
+          <input id="n" placeholder="Name" required>
+          <input id="ph" placeholder="Phone" required>
+          <input id="ad" placeholder="Address" required>
+
+          <h3>Payment</h3>
+          <label class="opt"><input type="radio" name="pm" value="COD" checked> Cash on delivery</label>
+          <label class="opt"><input type="radio" name="pm" value="UPI"> UPI (GPay / PhonePe / Paytm)</label>
+          <div id="upiBox" class="upi" hidden>
+            <p>Pay <b id="upiAmt"></b> to UPI ID <b id="upiId"></b></p>
+            <a id="upiLink" class="ghost" href="#">Open UPI app (phone)</a>
+            <img id="upiQr" class="qr" src="upi-qr.png" alt="" onerror="this.style.display='none'">
+            <input id="upiRef" placeholder="UPI transaction ID (after paying)" pattern="[A-Za-z0-9]{8,30}">
+          </div>
+
+          <button>Place order</button>
+        </form>
+        <p class="msg" id="msg"></p>
+      </main>
+    </div>
+  </div>
+
+  <script src="common.js"></script>
+  <script>
+    renderSidebar("bag");
+    const $ = id => document.getElementById(id);
+    const esc = v => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const fmt = n => Number(n).toFixed(2).replace(/\.00$/, "");
+
+    const SHOP_UPI_ID = "yourname@upi";   // <-- put your shop's real UPI ID here
+    const startedLoggedIn = !!getCustomer();   // which cart to read from
+
+    let subtotal = 0;      // price of the dresses (offer prices already applied)
+    let orderTotal = 0;    // subtotal minus coupon
+    let coupon = null;     // { code, discount } when a coupon is applied
+
+    async function load() {
+      let lines;
+      if (startedLoggedIn) {
+        const me = getCustomer();
+        const items = await (await fetch(`${API}/cart/${me.customerId}`)).json();
+        lines = items.map(i => ({
+          key: String(i.cartItemId), name: i.product.productName, price: i.product.effectivePrice ?? i.product.price,
+          quantity: i.quantity, size: i.size, color: i.color
+        }));
+      } else {
+        lines = getGuestBag().map(i => ({
+          key: `${i.productId}|${i.size || ""}|${i.color || ""}`,
+          name: i.productName, price: i.price, quantity: i.quantity, size: i.size, color: i.color
+        }));
+      }
+
+      $("items").innerHTML = lines.length
+        ? lines.map(l => `
+            <div class="row">
+              <span class="grow">${esc(l.name)}<small>₹${l.price}${l.size ? " · Size " + esc(l.size) : ""}${l.color ? " · " + esc(l.color) : ""}</small></span>
+              <input class="qty" type="number" min="1" value="${l.quantity}" onchange="setQty('${l.key}', this.value)">
+              <button class="ghost" onclick="removeItem('${l.key}')">Remove</button>
+            </div>`).join("")
+        : "<p class='msg'>Your bag is empty. <a href='index.html'>Go shopping →</a></p>";
+
+      subtotal = lines.reduce((s, l) => s + l.price * l.quantity, 0);
+      $("checkout").hidden = !lines.length;
+      $("couponBox").hidden = !lines.length;
+
+      if (!lines.length) {
+        coupon = null;
+        $("total").innerHTML = "";
+        $("couponMsg").textContent = "";
+      } else {
+        // a coupon applied earlier (even before login) is checked again against the new amount
+        const saved = sessionStorage.getItem("zCoupon");
+        if (saved) await applyCoupon(saved); else { coupon = null; renderTotals(); }
+      }
+      updateBagBadge();
+    }
+
+    // ---------- coupon ----------
+    async function applyCoupon(code) {
+      const r = await fetch(`${API}/coupons/validate?code=${encodeURIComponent(code)}&amount=${subtotal}`);
+      if (r.ok) {
+        const d = await r.json();
+        coupon = { code: d.code, discount: Number(d.discount) };
+        sessionStorage.setItem("zCoupon", d.code);
+        $("couponCode").value = d.code;
+        $("couponMsg").textContent = `Coupon ${d.code} applied. You save ₹${fmt(coupon.discount)}.`;
+      } else {
+        coupon = null;
+        sessionStorage.removeItem("zCoupon");
+        $("couponMsg").textContent = (await r.text()) || "This coupon cannot be used.";
+      }
+      renderTotals();
+    }
+
+    $("couponApply").onclick = () => {
+      const code = $("couponCode").value.trim();
+      if (code) applyCoupon(code);
+    };
+
+    $("couponRemove").onclick = () => {
+      coupon = null;
+      sessionStorage.removeItem("zCoupon");
+      $("couponCode").value = "";
+      $("couponMsg").textContent = "";
+      renderTotals();
+    };
+
+    function renderTotals() {
+      orderTotal = Math.max(subtotal - (coupon ? coupon.discount : 0), 0);
+      $("total").innerHTML =
+        `Subtotal: ₹${fmt(subtotal)}` +
+        (coupon ? `<br>Coupon ${esc(coupon.code)}: −₹${fmt(coupon.discount)}` : "") +
+        `<br><b>Total: ₹${fmt(orderTotal)}</b>`;
+      $("couponRemove").hidden = !coupon;
+      refreshUpi();
+    }
+
+    // ---------- bag lines ----------
+    async function setQty(key, q) {
+      q = +q;
+      if (startedLoggedIn) {
+        await fetch(`${API}/cart/update/${key}?quantity=${q}`, { method: "PUT" });
+      } else {
+        const [pid, size, color] = key.split("|");
+        const items = getGuestBag();
+        const item = items.find(i => String(i.productId) === pid && (i.size || "") === size && (i.color || "") === color);
+        if (item) item.quantity = q;
+        saveGuestBag(items);
+      }
+      load();
+    }
+
+    async function removeItem(key) {
+      if (startedLoggedIn) {
+        await fetch(`${API}/cart/remove/${key}`, { method: "DELETE" });
+      } else {
+        const [pid, size, color] = key.split("|");
+        saveGuestBag(getGuestBag().filter(i => !(String(i.productId) === pid && (i.size || "") === size && (i.color || "") === color)));
+      }
+      load();
+    }
+
+    // ---------- payment ----------
+    function refreshUpi() {
+      const upi = document.querySelector('input[name="pm"]:checked').value === "UPI";
+      $("upiBox").hidden = !upi;
+      $("upiRef").required = upi;
+      $("upiAmt").textContent = "₹" + fmt(orderTotal);
+      $("upiId").textContent = SHOP_UPI_ID;
+      $("upiLink").href = `upi://pay?pa=${SHOP_UPI_ID}&pn=Zivelle&am=${orderTotal.toFixed(2)}&cu=INR`;
+    }
+    document.querySelectorAll('input[name="pm"]').forEach(r => r.onchange = refreshUpi);
+
+    $("checkout").onsubmit = async (e) => {
+      e.preventDefault();
+
+      // Login/register is only ever asked for here, at checkout, not while
+      // browsing or adding things to the bag.
+      if (!getCustomer()) {
+        localStorage.setItem("zRedirect", "bag.html");
+        location.href = "login.html";
+        return;
+      }
+
+      const me = getCustomer();
+      const params = new URLSearchParams({
+        customerId: me.customerId, name: $("n").value, phone: $("ph").value, address: $("ad").value,
+        paymentMethod: document.querySelector('input[name="pm"]:checked').value,
+        paymentReference: $("upiRef").value,
+        couponCode: coupon ? coupon.code : ""
+      });
+      const r = await fetch(`${API}/orders/place?` + params, { method: "POST" });
+      if (r.ok) {
+        const placed = await r.json();
+        // orders.html reports this purchase to Google Analytics / Meta Pixel
+        sessionStorage.setItem("zPurchase", JSON.stringify({ id: placed.orderId, value: Number(placed.totalAmount) }));
+        sessionStorage.removeItem("zCoupon");
+        location.href = "orders.html";
+      } else {
+        const t = await r.text();
+        $("msg").textContent = (t && t.length < 200 && !t.trim().startsWith("{")) ? t : "Could not place the order. Please try again.";
+      }
+    };
+
+    const me = getCustomer();
+    if (me) { $("n").value = me.name; $("ph").value = me.phoneNumber || ""; $("ad").value = me.address || ""; }
+
+    load();
+  </script>
+</body>
+</html>
