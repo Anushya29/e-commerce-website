@@ -1,5 +1,4 @@
-const API = "http://localhost:8080/api";
-
+const API = "https://e-commerce-backend-bke5.onrender.com/api";
 // a customer can ask for a return within this many days of delivery (the backend uses the same number)
 const RETURN_DAYS = 3;
 
