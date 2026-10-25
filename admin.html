@@ -296,15 +296,15 @@
       } else if (t === "marketing") {
         await renderMarketing(p);
 
-      } else if (COMING[t]) {
-        const [step, text] = COMING[t];
-        p.innerHTML = `
-          <h2>${LABELS[t]}</h2>
-          <div class="panel coming">
-            <span class="pill">${step}</span>
-            <p>${text}</p>
-            <p class="msg">This page is not built yet. We will build it in ${step}.</p>
-          </div>`;
+      // } else if (COMING[t]) {
+      //   const [step, text] = COMING[t];
+      //   p.innerHTML = `
+      //     <h2>${LABELS[t]}</h2>
+      //     <div class="panel coming">
+      //       <span class="pill">${step}</span>
+      //       <p>${text}</p>
+      //       <p class="msg">This page is not built yet. We will build it in ${step}.</p>
+      //     </div>`;
 
       } else if (t === "products") {
         await renderProductList(p);
