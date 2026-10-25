@@ -64,14 +64,17 @@
     //   accounting:    ["Phase 2", "Vendor payouts, commissions and accounts."]
     // };
 
+    
     // label lookup, so a "coming" page can show the right title
-    const LABELS = {};
-    MENU.forEach(m => { LABELS[m.key] = m.label; (m.children || []).forEach(([k, l]) => LABELS[k] = l); });
+    // const LABELS = {};
+    // MENU.forEach(m => { LABELS[m.key] = m.label; (m.children || []).forEach(([k, l]) => LABELS[k] = l); });
 
-    let route = sessionStorage.getItem("zAdminRoute") || "dashboard";
-    const openGroups = new Set();
-    const groupOf = key => MENU.find(m => m.children && m.children.some(c => c[0] === key));
+    // let route = sessionStorage.getItem("zAdminRoute") || "dashboard";
+    // const openGroups = new Set();
+    // const groupOf = key => MENU.find(m => m.children && m.children.some(c => c[0] === key));
 
+
+    
     // ---------------------------------------------------------------
     // 2. SIDEBAR + NAVIGATION
     // ---------------------------------------------------------------
