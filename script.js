@@ -141,6 +141,7 @@ function renderProducts(products) {
 }
 
 async function quickAdd(product) {
+  if ((product.size || "").trim()) { location.href = "product.html?id=" + product.productId; return; }
   const customer = getCustomer();
 
   if (customer) {
